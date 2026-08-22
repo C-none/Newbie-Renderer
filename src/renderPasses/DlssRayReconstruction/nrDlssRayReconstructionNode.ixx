@@ -1,5 +1,6 @@
 export module nr.renderPasses:dlssRayReconstruction;
 
+import dependency.dlss;
 import dependency.math;
 import dependency.vulkan;
 import nr.options;
@@ -37,10 +38,10 @@ struct DlssRayReconstructionEvalConfig
     bool automaticMatrices = true;
     std::optional<std::array<float, 16u>> worldToViewRowMajor{};
     std::optional<std::array<float, 16u>> viewToClipRowMajor{};
-    nr::rhi::DlssToneMapper toneMapper = nr::rhi::DlssToneMapper::Aces;
+    nr::dependency::dlss::ToneMapper toneMapper = nr::dependency::dlss::ToneMapper::Aces;
     bool automaticFrameTimeDelta = true;
     float manualFrameTimeDeltaMilliseconds = 1000.0f / 60.0f;
-    std::array<nr::rhi::DlssCoordinates, nr::rhi::kDlssRayReconstructionSubrectSlotCount> subrectBases{};
+    std::array<nr::dependency::dlss::Coordinates, nr::dependency::dlss::rayReconstructionSubrectSlotCount> subrectBases{};
 };
 
 struct DlssRayReconstructionNodeInput
@@ -48,13 +49,13 @@ struct DlssRayReconstructionNodeInput
     bool enabled = false;
     bool bypass = false;
     bool overrideRenderSize = false;
-    nr::rhi::DlssDimensions renderSizeOverride{};
+    nr::dependency::dlss::Dimensions renderSizeOverride{};
     bool overrideTargetSize = false;
-    nr::rhi::DlssDimensions targetSizeOverride{};
-    nr::rhi::DlssRayReconstructionCreateDesc create{};
+    nr::dependency::dlss::Dimensions targetSizeOverride{};
+    nr::dependency::dlss::RayReconstructionCreateDesc create{};
     DlssRayReconstructionEvalConfig evaluate{};
-    std::array<bool, nr::rhi::kDlssRayReconstructionResourceSlotCount> includeResources{};
-    std::array<std::string, nr::rhi::kDlssRayReconstructionResourceSlotCount> resourceKeys{};
+    std::array<bool, nr::dependency::dlss::rayReconstructionResourceSlotCount> includeResources{};
+    std::array<std::string, nr::dependency::dlss::rayReconstructionResourceSlotCount> resourceKeys{};
     vk::Format outputColorFormat = vk::Format::eR16G16B16A16Sfloat;
     vk::Format outputAlphaFormat = vk::Format::eR16Sfloat;
     std::string outputColorKey{std::string{kDlssRayReconstructionOutputColorKey}};
@@ -64,7 +65,7 @@ struct DlssRayReconstructionNodeInput
 struct DlssRayReconstructionResolutionRequest
 {
     bool enabled = false;
-    nr::rhi::DlssQuality quality = nr::rhi::DlssQuality::Quality;
+    nr::dependency::dlss::Quality quality = nr::dependency::dlss::Quality::Quality;
     bool bypass = false;
 
     [[nodiscard]] friend bool operator==(const DlssRayReconstructionResolutionRequest &,
@@ -76,14 +77,14 @@ struct DlssRayReconstructionResolutionSnapshot
     DlssRayReconstructionResolutionRequest request{};
     vk::Extent2D displayExtent{1u, 1u};
     vk::Extent2D renderExtent{1u, 1u};
-    std::optional<nr::rhi::DlssOptimalSettings> optimalSettings{};
+    std::optional<nr::dependency::dlss::OptimalSettings> optimalSettings{};
 };
 
 class DlssRayReconstructionResolutionController final
 {
   public:
     using OptimalSettingsQuery =
-        std::function<nr::rhi::DlssOptimalSettings(nr::rhi::DlssDimensions, nr::rhi::DlssQuality)>;
+        std::function<nr::dependency::dlss::OptimalSettings(nr::dependency::dlss::Dimensions, nr::dependency::dlss::Quality)>;
 
     DlssRayReconstructionResolutionController();
     ~DlssRayReconstructionResolutionController();
@@ -108,8 +109,8 @@ class DlssRayReconstructionResolutionController final
 [[nodiscard]] DlssRayReconstructionResolutionRequest dlssResolutionRequestFromSnapshot(
     const nr::options::OptionFrameSnapshot &snapshot);
 
-[[nodiscard]] bool dlssRayReconstructionResourceRequired(nr::rhi::DlssRayReconstructionResourceSlot slot,
-                                                         nr::rhi::DlssRoughnessMode roughnessMode,
+[[nodiscard]] bool dlssRayReconstructionResourceRequired(nr::dependency::dlss::RayReconstructionResourceSlot slot,
+                                                         nr::dependency::dlss::RoughnessMode roughnessMode,
                                                          bool alphaUpscaling) noexcept;
 
 class DlssRayReconstructionNode final : public Node

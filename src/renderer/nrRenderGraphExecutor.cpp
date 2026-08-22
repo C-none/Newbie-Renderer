@@ -274,8 +274,7 @@ namespace nr::renderer
     auto runtimeBindings = prepared.runtimeBindings;
     auto const frameBoundaryFrameID = context.device.frameBoundaryEnabled() ? nextFrameBoundaryId_++ : std::uint64_t{0};
 
-    auto frameCount = context.device.frameManager.frameCount();
-    nrAssert(frameCount > 0, "RenderGraphExecutor::execute requires at least one frame context.");
+    constexpr auto frameCount = std::size_t{nr::maxFrameInFlight};
 
     if (primaryCommandBuffersByFrame_.size() != frameCount)
     {
@@ -428,7 +427,7 @@ namespace nr::renderer
         auto &commandBuffer = primaryCommandBufferForQueue(context, frameSlot, planBatch.queue, commandBufferOrdinal);
 
         commandBuffer.reset();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         {
             auto debugLabelScope = detail::ScopedCommandBufferDebugLabel{
                 commandBuffer,
@@ -437,7 +436,7 @@ namespace nr::renderer
             report.appliedReleaseBarrierCount += recordOwnershipTransitions(
                 commandBuffer, planBatch.tailReleaseTransitions, TransitionPlacement::Release);
         }
-        nr::rhi::CommandRecorder::end(commandBuffer);
+        commandBuffer.end();
 
         auto submitBatch = nr::rhi::CommandBatch{};
         submitBatch.addCommandBuffer(commandBuffer);
@@ -499,7 +498,7 @@ namespace nr::renderer
         auto &commandBuffer = primaryCommandBufferForQueue(context, frameSlot, planBatch.queue, batchOrdinal);
 
         commandBuffer.reset();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         {
             auto batchDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
                 commandBuffer,
@@ -534,7 +533,7 @@ namespace nr::renderer
             }
         }
 
-        nr::rhi::CommandRecorder::end(commandBuffer);
+        commandBuffer.end();
 
         auto submitBatch = nr::rhi::CommandBatch{};
         submitBatch.addCommandBuffer(commandBuffer);
@@ -593,8 +592,8 @@ namespace nr::renderer
                                          report.plan.batches.size() + report.plan.initialReleaseBatches.size());
 
         commandBuffer.reset();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-        nr::rhi::CommandRecorder::end(commandBuffer);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        commandBuffer.end();
 
         auto submitBatch = nr::rhi::CommandBatch{};
         submitBatch.addCommandBuffer(commandBuffer);

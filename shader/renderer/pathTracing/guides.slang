@@ -61,7 +61,7 @@ public struct PathTracingGuideState
     }
 };
 
-public float3 pathTracingGuideEnvBrdfApprox2(float3 specularColor, float alpha, float noV)
+public float3 pathTracingGuideEnvBrdfApprox2(float3 specularF0, float3 specularF90, float alpha, float noV)
 {
     noV = abs(noV);
     float4 x = float4(1.0f, noV, noV * noV, noV * noV * noV);
@@ -77,25 +77,7 @@ public float3 pathTracingGuideEnvBrdfApprox2(float3 specularColor, float alpha, 
     float scaleDenominator = dot(mul(x.xzw, m4), y.xyw);
     float bias = dot(mul(x.xy, m1), y.xy) / pathTracingGuideSafeDivideW(biasDenominator);
     float scale = dot(mul(x.xy, m3), y.xy) / pathTracingGuideSafeDivideW(scaleDenominator);
-    bias *= saturate(specularColor.g * 50.0f);
-    return specularColor * max(0.0f, scale) + max(0.0f, bias);
-}
-
-public float3 pathTracingGuidePrimarySpecularF0(ResolvedMaterialPayload material, MaterialSample core)
-{
-    if (uint(material.layerFlags & RtMaterialLayerFlag.transmission) == 0u)
-    {
-        return metallicRoughnessF0(core);
-    }
-
-    float ior = material.layers.transmissionIor;
-    float dielectricF0 = 1.0f;
-    if (ior > 0.0f)
-    {
-        float ratio = (ior - 1.0f) / max(ior + 1.0f, 1.0e-7f);
-        dielectricF0 = saturate(ratio * ratio);
-    }
-    return lerp(float3(dielectricF0), core.baseColor.rgb, core.metallic);
+    return specularF0 * max(0.0f, scale) + specularF90 * max(0.0f, bias);
 }
 
 public void capturePathTracingPrimarySurfaceGuides(inout PathTracingGuideState guides, ResolvedMaterialPayload material,
@@ -119,12 +101,14 @@ public void capturePathTracingPrimarySurfaceGuides(inout PathTracingGuideState g
     guides.diffuseAlbedo = max(material.baseColor.rgb * (1.0f - saturate(material.metallic)), float3(0.0f));
 
     MaterialSample core = materialSampleFromResolvedPayload(material);
-    float3 specularColor = pathTracingGuidePrimarySpecularF0(material, core);
+    float3 specularF0 = metallicRoughnessF0(core);
+    float3 specularF90 = lerp(float3(core.dielectricF90), float3(1.0f), core.metallic);
     float alpha = material.roughness * material.roughness;
     float3 specularNormal =
         adjustMaterialPayloadSpecularNormal(material.shadingNormal, material.geometryNormal, viewDirection);
     float noV = saturate(dot(specularNormal, viewDirection));
-    guides.specularAlbedo = max(pathTracingGuideEnvBrdfApprox2(specularColor, alpha, noV), float3(0.0f));
+    guides.specularAlbedo =
+        max(pathTracingGuideEnvBrdfApprox2(specularF0, specularF90, alpha, noV), float3(0.0f));
 }
 
 public bool pathTracingGuideIsSpecularReflection(ResolvedMaterialScatterKind kind)

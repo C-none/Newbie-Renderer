@@ -16,11 +16,13 @@ public uint verifyMaterialFilterPacketAdvance()
     float4 discarded0 = reference.rand4();
     float4 discarded1 = reference.rand4();
     float4 discarded2 = reference.rand4();
-    advanced.advanceThreeRand4Packets();
+    float4 discarded3 = reference.rand4();
+    advanced.advanceFourRand4Packets();
 
     // Keep the discarded values live so this contract compiles both paths.
     uint finiteMask =
-        uint(all(isfinite(discarded0))) & uint(all(isfinite(discarded1))) & uint(all(isfinite(discarded2)));
+        uint(all(isfinite(discarded0))) & uint(all(isfinite(discarded1))) & uint(all(isfinite(discarded2))) &
+        uint(all(isfinite(discarded3)));
     return finiteMask & uint(reference.sampleIndex == advanced.sampleIndex) &
            uint(reference.sampleSeed == advanced.sampleSeed);
 }

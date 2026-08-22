@@ -35,7 +35,7 @@ public struct NeuralAppearanceFixture
 };
 
 NeuralAppearanceFixture neuralAppearanceFixtureFromUnitValues(
-    float3 baseColorUnit, float metallicUnit, float roughnessUnit, float2 normalSlopeUnit,
+    float3 baseColorUnit, float metallicUnit, float roughnessUnit, float2 normalDiskUnit,
     float anisotropyStrengthUnit, float anisotropyAngleUnit)
 {
     float3 baseColor = lerp(float3(0.02f), float3(1.0f), saturate(baseColorUnit));
@@ -43,9 +43,16 @@ NeuralAppearanceFixture neuralAppearanceFixtureFromUnitValues(
     float roughness = lerp(kMaterialMinRoughness, 1.0f, saturate(roughnessUnit));
     float anisotropyStrength = saturate(anisotropyStrengthUnit);
 
-    float2 normalSlope = 0.5f * (2.0f * saturate(normalSlopeUnit) - 1.0f);
-    float3 shadingNormal = safeNormalize(float3(normalSlope.x, 1.0f, normalSlope.y),
-                                         float3(0.0f, 1.0f, 0.0f));
+    // Sampling the projected XZ disk uniformly and lifting its remaining Y
+    // component covers the complete geometric upper hemisphere. The sqrt on
+    // the radius compensates the polar-area Jacobian.
+    float normalDiskRadiusSquared = saturate(normalDiskUnit.x);
+    float normalDiskRadius = sqrt(normalDiskRadiusSquared);
+    float normalDiskAngle = kNeuralAppearanceTrainingTwoPi * saturate(normalDiskUnit.y);
+    float2 normalDisk = normalDiskRadius * float2(cos(normalDiskAngle), sin(normalDiskAngle));
+    float3 shadingNormal = safeNormalize(
+        float3(normalDisk.x, sqrt(saturate(1.0f - normalDiskRadiusSquared)), normalDisk.y),
+        float3(0.0f, 1.0f, 0.0f));
 
     float anisotropyAngle = kNeuralAppearanceTrainingTwoPi * saturate(anisotropyAngleUnit);
     float3 tangentHint = float3(cos(anisotropyAngle), 0.0f, sin(anisotropyAngle));

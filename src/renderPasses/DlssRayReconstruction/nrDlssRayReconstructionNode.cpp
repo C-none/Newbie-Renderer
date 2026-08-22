@@ -1,5 +1,6 @@
 module nr.renderPasses;
 
+import dependency.dlss;
 import dependency.math;
 import dependency.vulkan;
 import :dlssRayReconstruction;
@@ -34,21 +35,21 @@ struct DlssRayReconstructionRuntime
     std::mutex mutex{};
     std::unique_ptr<nr::rhi::DlssRayReconstructionFeature> feature{};
     std::shared_ptr<nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>> motionVectorDebugPipeline{};
-    std::optional<nr::rhi::DlssRayReconstructionCreateDesc> activeCreateDesc{};
+    std::optional<nr::dependency::dlss::RayReconstructionCreateDesc> activeCreateDesc{};
     bool resetNextEvaluation = false;
 };
 
 struct DlssRayReconstructionResolutionControllerImpl
 {
-    static constexpr auto qualityCount = static_cast<std::size_t>(nr::rhi::DlssQuality::Count);
+    static constexpr auto qualityCount = static_cast<std::size_t>(nr::dependency::dlss::Quality::Count);
 
-    std::array<std::optional<nr::rhi::DlssOptimalSettings>, qualityCount> optimalSettingsByQuality{};
+    std::array<std::optional<nr::dependency::dlss::OptimalSettings>, qualityCount> optimalSettingsByQuality{};
     std::optional<vk::Extent2D> cacheDisplayExtent{};
     std::optional<DlssRayReconstructionResolutionSnapshot> snapshot{};
 };
 
-void validateDlssOptimalSettings(const nr::rhi::DlssOptimalSettings &settings, nr::rhi::DlssDimensions targetSize,
-                                 nr::rhi::DlssQuality quality)
+void validateDlssOptimalSettings(const nr::dependency::dlss::OptimalSettings &settings, nr::dependency::dlss::Dimensions targetSize,
+                                 nr::dependency::dlss::Quality quality)
 {
     nr::nrAssert(settings.status.success(), "DLSS RR optimal-settings query failed: {}", settings.status.message);
     nr::nrAssert(settings.optimalRenderSize.valid() && settings.minimumRenderSize.valid() &&
@@ -61,27 +62,27 @@ void validateDlssOptimalSettings(const nr::rhi::DlssOptimalSettings &settings, n
                      settings.maximumRenderSize.width <= targetSize.width &&
                      settings.maximumRenderSize.height <= targetSize.height,
                  "DLSS RR optimal-settings query returned inconsistent dimensions or bounds outside the target size.");
-    if (quality == nr::rhi::DlssQuality::Dlaa)
+    if (quality == nr::dependency::dlss::Quality::Dlaa)
     {
         nr::nrAssert(settings.optimalRenderSize == targetSize,
                      "DLSS RR DLAA optimal render size must equal the target size.");
     }
 }
 
-[[nodiscard]] constexpr std::size_t slotIndex(nr::rhi::DlssRayReconstructionResourceSlot slot) noexcept
+[[nodiscard]] constexpr std::size_t slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot slot) noexcept
 {
     return static_cast<std::size_t>(slot);
 }
 
-[[nodiscard]] constexpr std::size_t subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot slot) noexcept
+[[nodiscard]] constexpr std::size_t subrectSlotIndex(nr::dependency::dlss::RayReconstructionSubrectSlot slot) noexcept
 {
     return static_cast<std::size_t>(slot);
 }
 
 [[nodiscard]] bool dlssInputResourceActive(const DlssRayReconstructionNodeInput &input,
-                                           nr::rhi::DlssRayReconstructionResourceSlot slot) noexcept
+                                           nr::dependency::dlss::RayReconstructionResourceSlot slot) noexcept
 {
-    using Resource = nr::rhi::DlssRayReconstructionResourceSlot;
+    using Resource = nr::dependency::dlss::RayReconstructionResourceSlot;
     if (slot == Resource::Output || slot == Resource::OutputAlpha)
     {
         return false;
@@ -134,13 +135,13 @@ void validateDlssEvaluationConfiguration(const DlssRayReconstructionEvalConfig &
     nrAssert(std::isfinite(evaluate.exposureScale), "DLSS RR exposure scale must be finite.");
 }
 
-void validateDlssResolvedConfiguration(const nr::rhi::DlssRayReconstructionCreateDesc &createDesc,
+void validateDlssResolvedConfiguration(const nr::dependency::dlss::RayReconstructionCreateDesc &createDesc,
                                        bool depthOfFieldGuideActive)
 {
     nrAssert(createDesc.renderSize.valid() && createDesc.targetSize.valid(),
              "DLSS RR requires non-zero render and target sizes.");
-    nrAssert(createDesc.quality != nr::rhi::DlssQuality::Count, "DLSS RR quality value is invalid.");
-    if (createDesc.quality == nr::rhi::DlssQuality::Dlaa)
+    nrAssert(createDesc.quality != nr::dependency::dlss::Quality::Count, "DLSS RR quality value is invalid.");
+    if (createDesc.quality == nr::dependency::dlss::Quality::Dlaa)
     {
         nrAssert(createDesc.renderSize == createDesc.targetSize,
                  "DLSS RR DLAA requires render size to equal target size.");
@@ -148,104 +149,104 @@ void validateDlssResolvedConfiguration(const nr::rhi::DlssRayReconstructionCreat
     if (depthOfFieldGuideActive)
     {
         auto const activePreset = createDesc.presets[static_cast<std::size_t>(createDesc.quality)];
-        nrAssert(activePreset == nr::rhi::DlssRayReconstructionPreset::E,
+        nrAssert(activePreset == nr::dependency::dlss::Preset::E,
                  "DLSS RR requires Preset E for the active quality mode when the Depth of Field guide is included.");
     }
 }
 
 struct SubrectResourceMapping
 {
-    nr::rhi::DlssRayReconstructionSubrectSlot subrect;
-    nr::rhi::DlssRayReconstructionResourceSlot resource;
+    nr::dependency::dlss::RayReconstructionSubrectSlot subrect;
+    nr::dependency::dlss::RayReconstructionResourceSlot resource;
 };
 
 inline constexpr auto subrectResourceMappings = std::array{
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Alpha,
-                           nr::rhi::DlssRayReconstructionResourceSlot::Alpha},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::OutputAlpha,
-                           nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::DiffuseAlbedo,
-                           nr::rhi::DlssRayReconstructionResourceSlot::DiffuseAlbedo},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::SpecularAlbedo,
-                           nr::rhi::DlssRayReconstructionResourceSlot::SpecularAlbedo},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Normals,
-                           nr::rhi::DlssRayReconstructionResourceSlot::Normals},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Roughness,
-                           nr::rhi::DlssRayReconstructionResourceSlot::Roughness},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Color,
-                           nr::rhi::DlssRayReconstructionResourceSlot::Color},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Depth,
-                           nr::rhi::DlssRayReconstructionResourceSlot::Depth},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::MotionVectors,
-                           nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Translucency,
-                           nr::rhi::DlssRayReconstructionResourceSlot::TransparencyMask},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::BiasCurrentColor,
-                           nr::rhi::DlssRayReconstructionResourceSlot::BiasCurrentColorMask},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::Output,
-                           nr::rhi::DlssRayReconstructionResourceSlot::Output},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ReflectedAlbedo,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ReflectedAlbedo},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorBeforeParticles,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorBeforeParticles},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorAfterParticles,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorAfterParticles},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorBeforeTransparency,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorBeforeTransparency},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorAfterTransparency,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorAfterTransparency},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorBeforeFog,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorBeforeFog},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorAfterFog,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorAfterFog},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ScreenSpaceSubsurfaceScatteringGuide,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ScreenSpaceSubsurfaceScatteringGuide},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorBeforeScreenSpaceSubsurfaceScattering,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorBeforeScreenSpaceSubsurfaceScattering},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorAfterScreenSpaceSubsurfaceScattering,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorAfterScreenSpaceSubsurfaceScattering},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ScreenSpaceRefractionGuide,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ScreenSpaceRefractionGuide},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorBeforeScreenSpaceRefraction,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorBeforeScreenSpaceRefraction},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorAfterScreenSpaceRefraction,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorAfterScreenSpaceRefraction},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::DepthOfFieldGuide,
-                           nr::rhi::DlssRayReconstructionResourceSlot::DepthOfFieldGuide},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorBeforeDepthOfField,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorBeforeDepthOfField},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ColorAfterDepthOfField,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ColorAfterDepthOfField},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::DiffuseHitDistance,
-                           nr::rhi::DlssRayReconstructionResourceSlot::DiffuseHitDistance},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::SpecularHitDistance,
-                           nr::rhi::DlssRayReconstructionResourceSlot::SpecularHitDistance},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::DiffuseRayDirection,
-                           nr::rhi::DlssRayReconstructionResourceSlot::DiffuseRayDirection},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::SpecularRayDirection,
-                           nr::rhi::DlssRayReconstructionResourceSlot::SpecularRayDirection},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::DiffuseRayDirectionHitDistance,
-                           nr::rhi::DlssRayReconstructionResourceSlot::DiffuseRayDirectionHitDistance},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::SpecularRayDirectionHitDistance,
-                           nr::rhi::DlssRayReconstructionResourceSlot::SpecularRayDirectionHitDistance},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::TransparencyLayer,
-                           nr::rhi::DlssRayReconstructionResourceSlot::TransparencyLayer},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::TransparencyLayerOpacity,
-                           nr::rhi::DlssRayReconstructionResourceSlot::TransparencyLayerOpacity},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::TransparencyLayerMotionVectors,
-                           nr::rhi::DlssRayReconstructionResourceSlot::TransparencyLayerMotionVectors},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::DisocclusionMask,
-                           nr::rhi::DlssRayReconstructionResourceSlot::DisocclusionMask},
-    SubrectResourceMapping{nr::rhi::DlssRayReconstructionSubrectSlot::ResponsivityMask,
-                           nr::rhi::DlssRayReconstructionResourceSlot::ResponsivityMask},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Alpha,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::Alpha},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::OutputAlpha,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::OutputAlpha},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::DiffuseAlbedo,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::DiffuseAlbedo},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::SpecularAlbedo,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::SpecularAlbedo},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Normals,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::Normals},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Roughness,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::Roughness},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Color,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::Color},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Depth,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::Depth},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::MotionVectors,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::MotionVectors},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Translucency,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::TransparencyMask},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::BiasCurrentColor,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::BiasCurrentColorMask},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::Output,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::Output},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ReflectedAlbedo,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ReflectedAlbedo},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorBeforeParticles,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorBeforeParticles},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorAfterParticles,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorAfterParticles},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorBeforeTransparency,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorBeforeTransparency},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorAfterTransparency,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorAfterTransparency},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorBeforeFog,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorBeforeFog},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorAfterFog,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorAfterFog},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ScreenSpaceSubsurfaceScatteringGuide,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ScreenSpaceSubsurfaceScatteringGuide},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorBeforeScreenSpaceSubsurfaceScattering,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorBeforeScreenSpaceSubsurfaceScattering},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorAfterScreenSpaceSubsurfaceScattering,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorAfterScreenSpaceSubsurfaceScattering},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ScreenSpaceRefractionGuide,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ScreenSpaceRefractionGuide},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorBeforeScreenSpaceRefraction,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorBeforeScreenSpaceRefraction},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorAfterScreenSpaceRefraction,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorAfterScreenSpaceRefraction},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::DepthOfFieldGuide,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::DepthOfFieldGuide},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorBeforeDepthOfField,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorBeforeDepthOfField},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ColorAfterDepthOfField,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ColorAfterDepthOfField},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::DiffuseHitDistance,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::DiffuseHitDistance},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::SpecularHitDistance,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::SpecularHitDistance},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::DiffuseRayDirection,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::DiffuseRayDirection},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::SpecularRayDirection,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::SpecularRayDirection},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::DiffuseRayDirectionHitDistance,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::DiffuseRayDirectionHitDistance},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::SpecularRayDirectionHitDistance,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::SpecularRayDirectionHitDistance},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::TransparencyLayer,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::TransparencyLayer},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::TransparencyLayerOpacity,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::TransparencyLayerOpacity},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::TransparencyLayerMotionVectors,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::TransparencyLayerMotionVectors},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::DisocclusionMask,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::DisocclusionMask},
+    SubrectResourceMapping{nr::dependency::dlss::RayReconstructionSubrectSlot::ResponsivityMask,
+                           nr::dependency::dlss::RayReconstructionResourceSlot::ResponsivityMask},
 };
-static_assert(subrectResourceMappings.size() == nr::rhi::kDlssRayReconstructionSubrectSlotCount);
+static_assert(subrectResourceMappings.size() == nr::dependency::dlss::rayReconstructionSubrectSlotCount);
 
-[[nodiscard]] nr::rhi::DlssDimensions requiredSubrectDimensions(
-    nr::rhi::DlssRayReconstructionResourceSlot resource,
-    const nr::rhi::DlssRayReconstructionCreateDesc &createDesc) noexcept
+[[nodiscard]] nr::dependency::dlss::Dimensions requiredSubrectDimensions(
+    nr::dependency::dlss::RayReconstructionResourceSlot resource,
+    const nr::dependency::dlss::RayReconstructionCreateDesc &createDesc) noexcept
 {
-    using Resource = nr::rhi::DlssRayReconstructionResourceSlot;
+    using Resource = nr::dependency::dlss::RayReconstructionResourceSlot;
     if (resource == Resource::Output || resource == Resource::OutputAlpha)
     {
         return createDesc.targetSize;
@@ -259,9 +260,9 @@ static_assert(subrectResourceMappings.size() == nr::rhi::kDlssRayReconstructionS
 
 void validateActiveSubrectBounds(
     const std::array<std::optional<nr::renderer::NodeImageResourceDesc>,
-                     nr::rhi::kDlssRayReconstructionResourceSlotCount> &descriptions,
-    const std::array<nr::rhi::DlssCoordinates, nr::rhi::kDlssRayReconstructionSubrectSlotCount> &subrectBases,
-    const nr::rhi::DlssRayReconstructionCreateDesc &createDesc)
+                     nr::dependency::dlss::rayReconstructionResourceSlotCount> &descriptions,
+    const std::array<nr::dependency::dlss::Coordinates, nr::dependency::dlss::rayReconstructionSubrectSlotCount> &subrectBases,
+    const nr::dependency::dlss::RayReconstructionCreateDesc &createDesc)
 {
     std::ranges::for_each(subrectResourceMappings, [&](const SubrectResourceMapping &mapping) {
         auto const &description = descriptions[slotIndex(mapping.resource)];
@@ -278,12 +279,12 @@ void validateActiveSubrectBounds(
             baseFits && required.width <= extent.width - base.x && required.height <= extent.height - base.y;
         nrAssert(dimensionsFit, 
                      "DLSS RR resource '{}' subrect base ({}, {}) with required size {}x{} exceeds image extent {}x{}.",
-                     nr::rhi::dlssResourceSlotName(mapping.resource), base.x, base.y, required.width, required.height,
+                     nr::dependency::dlss::resourceSlotName(mapping.resource), base.x, base.y, required.width, required.height,
                      extent.width, extent.height);
     });
 }
 
-[[nodiscard]] vk::Extent3D outputExtent(nr::rhi::DlssDimensions targetSize, nr::rhi::DlssCoordinates subrectBase,
+[[nodiscard]] vk::Extent3D outputExtent(nr::dependency::dlss::Dimensions targetSize, nr::dependency::dlss::Coordinates subrectBase,
                                         bool outputSubrectsEnabled, std::string_view label)
 {
     if (!outputSubrectsEnabled)
@@ -311,43 +312,43 @@ void validateActiveSubrectBounds(
     return (value + divisor - 1u) / divisor;
 }
 
-[[nodiscard]] nr::rhi::DlssQuality dlssQualityFromOption(std::string_view value)
+[[nodiscard]] nr::dependency::dlss::Quality dlssQualityFromOption(std::string_view value)
 {
     if (value == "performance")
     {
-        return nr::rhi::DlssQuality::Performance;
+        return nr::dependency::dlss::Quality::Performance;
     }
     if (value == "balanced")
     {
-        return nr::rhi::DlssQuality::Balanced;
+        return nr::dependency::dlss::Quality::Balanced;
     }
     if (value == "quality")
     {
-        return nr::rhi::DlssQuality::Quality;
+        return nr::dependency::dlss::Quality::Quality;
     }
     if (value == "ultra_performance")
     {
-        return nr::rhi::DlssQuality::UltraPerformance;
+        return nr::dependency::dlss::Quality::UltraPerformance;
     }
     nrAssert(value == "dlaa", "DLSS option snapshot contains an invalid quality.");
-    return nr::rhi::DlssQuality::Dlaa;
+    return nr::dependency::dlss::Quality::Dlaa;
 }
 
-[[nodiscard]] std::string dlssQualityOptionValue(nr::rhi::DlssQuality value)
+[[nodiscard]] std::string dlssQualityOptionValue(nr::dependency::dlss::Quality value)
 {
     switch (value)
     {
-    case nr::rhi::DlssQuality::Performance:
+    case nr::dependency::dlss::Quality::Performance:
         return "performance";
-    case nr::rhi::DlssQuality::Balanced:
+    case nr::dependency::dlss::Quality::Balanced:
         return "balanced";
-    case nr::rhi::DlssQuality::Quality:
+    case nr::dependency::dlss::Quality::Quality:
         return "quality";
-    case nr::rhi::DlssQuality::UltraPerformance:
+    case nr::dependency::dlss::Quality::UltraPerformance:
         return "ultra_performance";
-    case nr::rhi::DlssQuality::Dlaa:
+    case nr::dependency::dlss::Quality::Dlaa:
         return "dlaa";
-    case nr::rhi::DlssQuality::Count:
+    case nr::dependency::dlss::Quality::Count:
         break;
     }
     nrAssert(false, "DLSS graph registration received an invalid quality.");
@@ -390,23 +391,23 @@ std::array<float, 16u> toDlssRowVectorMatrix(const DirectX::XMFLOAT4X4 &value) n
     };
 }
 
-[[nodiscard]] nr::rhi::DlssImage makeDlssImage(const nr::renderer::PassImageResource &image,
+[[nodiscard]] nr::dependency::dlss::VulkanImage makeDlssImage(const nr::renderer::PassImageResource &image,
                                                const nr::renderer::NodeImageResourceDesc &desc, bool readWrite)
 {
-    return nr::rhi::DlssImage{
+    return nr::dependency::dlss::VulkanImage{
         .image = image.image,
         .view = image.view,
         .subresourceRange = image.subresourceRange,
         .format = desc.format,
-        .extent = nr::rhi::DlssDimensions{image.extent.width, image.extent.height},
+        .extent = nr::dependency::dlss::Dimensions{image.extent.width, image.extent.height},
         .readWrite = readWrite,
     };
 }
 
 [[nodiscard]] nr::renderer::PassPrepareCallback makeDlssPrepareCallback(
     std::shared_ptr<DlssRayReconstructionRuntime> runtime,
-    nr::rhi::DlssRayReconstructionCreateDesc createDesc,
-    std::optional<nr::rhi::DlssOptimalSettings> coordinatedOptimalSettings)
+    nr::dependency::dlss::RayReconstructionCreateDesc createDesc,
+    std::optional<nr::dependency::dlss::OptimalSettings> coordinatedOptimalSettings)
 {
     return [runtime = std::move(runtime), createDesc,
             coordinatedOptimalSettings = std::move(coordinatedOptimalSettings)](
@@ -431,17 +432,17 @@ std::array<float, 16u> toDlssRowVectorMatrix(const DirectX::XMFLOAT4X4 &value) n
 
 [[nodiscard]] nr::renderer::PassRecordCallback makeDlssRecordCallback(
     std::shared_ptr<DlssRayReconstructionRuntime> runtime,
-    std::array<nr::renderer::GraphResourceHandle, nr::rhi::kDlssRayReconstructionResourceSlotCount> handles,
+    std::array<nr::renderer::GraphResourceHandle, nr::dependency::dlss::rayReconstructionResourceSlotCount> handles,
     std::array<std::optional<nr::renderer::NodeImageResourceDesc>,
-               nr::rhi::kDlssRayReconstructionResourceSlotCount> descriptions,
-    nr::rhi::DlssRayReconstructionEvalDesc evalDesc)
+               nr::dependency::dlss::rayReconstructionResourceSlotCount> descriptions,
+    nr::dependency::dlss::RayReconstructionEvalDesc evalDesc)
 {
     return [runtime = std::move(runtime), handles = std::move(handles), descriptions = std::move(descriptions),
             evalDesc = std::move(evalDesc)](const nr::renderer::PassRecordContext &recordContext) mutable {
         nrAssert(recordContext.commandBuffer.has_value(), "DLSS RR record requires a command buffer.");
         nrAssert(static_cast<bool>(recordContext.resolveImage),
                  "DLSS RR record requires the graph image resolver.");
-        auto const indices = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
+        auto const indices = std::views::iota(std::size_t{0u}, nr::dependency::dlss::rayReconstructionResourceSlotCount);
         std::ranges::for_each(indices, [&](std::size_t index) {
             if (!handles[index].valid())
             {
@@ -450,9 +451,9 @@ std::array<float, 16u> toDlssRowVectorMatrix(const DirectX::XMFLOAT4X4 &value) n
             auto resolved = recordContext.resolveImage(handles[index]);
             nrAssert(resolved.has_value(), "DLSS RR failed to resolve image slot {}.", index);
             nrAssert(descriptions[index].has_value(), "DLSS RR image format snapshot is missing.");
-            auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
-            auto const readWrite = slot == nr::rhi::DlssRayReconstructionResourceSlot::Output ||
-                                   slot == nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha;
+            auto const slot = static_cast<nr::dependency::dlss::RayReconstructionResourceSlot>(index);
+            auto const readWrite = slot == nr::dependency::dlss::RayReconstructionResourceSlot::Output ||
+                                   slot == nr::dependency::dlss::RayReconstructionResourceSlot::OutputAlpha;
             evalDesc.resources[index] = makeDlssImage(*resolved, *descriptions[index], readWrite);
         });
 
@@ -493,7 +494,7 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
              "DLSS RR resolution controller received an invalid quality mode.");
     if (request.enabled)
     {
-        nrAssert(!request.bypass || request.quality == nr::rhi::DlssQuality::Dlaa,
+        nrAssert(!request.bypass || request.quality == nr::dependency::dlss::Quality::Dlaa,
                  "DLSS RR bypass is available only in DLAA mode.");
     }
 
@@ -507,7 +508,7 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
         .displayExtent = displayExtent,
         .renderExtent = displayExtent,
     };
-    auto optimalSettings = std::optional<nr::rhi::DlssOptimalSettings>{};
+    auto optimalSettings = std::optional<nr::dependency::dlss::OptimalSettings>{};
     if (request.enabled)
     {
         nrAssert(static_cast<bool>(optimalSettingsQuery),
@@ -515,13 +516,13 @@ nr::renderer::FrameResolutionPlan DlssRayReconstructionResolutionController::res
         auto &cachedSettings = impl_->optimalSettingsByQuality[qualityIndex];
         if (!cachedSettings.has_value())
         {
-            cachedSettings = optimalSettingsQuery(nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height},
+            cachedSettings = optimalSettingsQuery(nr::dependency::dlss::Dimensions{displayExtent.width, displayExtent.height},
                                                   request.quality);
         }
 
         auto const &settings = *cachedSettings;
         detail::validateDlssOptimalSettings(
-            settings, nr::rhi::DlssDimensions{displayExtent.width, displayExtent.height}, request.quality);
+            settings, nr::dependency::dlss::Dimensions{displayExtent.width, displayExtent.height}, request.quality);
 
         plan.renderExtent = vk::Extent2D{settings.optimalRenderSize.width, settings.optimalRenderSize.height};
         optimalSettings = settings;
@@ -557,23 +558,23 @@ std::optional<DlssRayReconstructionResolutionSnapshot> DlssRayReconstructionReso
 DlssRayReconstructionNodeInput makeDefaultDlssRayReconstructionNodeInput()
 {
     auto result = DlssRayReconstructionNodeInput{};
-    std::ranges::fill(result.create.presets, nr::rhi::DlssRayReconstructionPreset::Default);
+    std::ranges::fill(result.create.presets, nr::dependency::dlss::Preset::Default);
 
-    auto indices = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
+    auto indices = std::views::iota(std::size_t{0u}, nr::dependency::dlss::rayReconstructionResourceSlotCount);
     std::ranges::for_each(indices, [&](std::size_t index) {
-        auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
-        result.resourceKeys[index] = std::format("dlss.rr.input.{}", nr::rhi::dlssResourceSlotName(slot));
+        auto const slot = static_cast<nr::dependency::dlss::RayReconstructionResourceSlot>(index);
+        result.resourceKeys[index] = std::format("dlss.rr.input.{}", nr::dependency::dlss::resourceSlotName(slot));
         result.includeResources[index] = dlssRayReconstructionResourceRequired(slot, result.create.roughnessMode,
                                                                                result.create.flags.alphaUpscaling);
     });
-    result.includeResources[detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::SpecularHitDistance)] = true;
+    result.includeResources[detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::SpecularHitDistance)] = true;
     return result;
 }
 
-bool dlssRayReconstructionResourceRequired(nr::rhi::DlssRayReconstructionResourceSlot slot,
-                                           nr::rhi::DlssRoughnessMode roughnessMode, bool alphaUpscaling) noexcept
+bool dlssRayReconstructionResourceRequired(nr::dependency::dlss::RayReconstructionResourceSlot slot,
+                                           nr::dependency::dlss::RoughnessMode roughnessMode, bool alphaUpscaling) noexcept
 {
-    using Slot = nr::rhi::DlssRayReconstructionResourceSlot;
+    using Slot = nr::dependency::dlss::RayReconstructionResourceSlot;
     switch (slot)
     {
     case Slot::DiffuseAlbedo:
@@ -584,7 +585,7 @@ bool dlssRayReconstructionResourceRequired(nr::rhi::DlssRayReconstructionResourc
     case Slot::MotionVectors:
         return true;
     case Slot::Roughness:
-        return roughnessMode == nr::rhi::DlssRoughnessMode::Unpacked;
+        return roughnessMode == nr::dependency::dlss::RoughnessMode::Unpacked;
     case Slot::Alpha:
         return alphaUpscaling;
     default:
@@ -710,8 +711,8 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
         return;
     }
 
-    nrAssert(nr::rhi::dlssSdkCompiled(), "DLSS RR was enabled, but the validated NGX bridge could not be loaded.");
-    nrAssert(!input.bypass || input.create.quality == nr::rhi::DlssQuality::Dlaa,
+    nrAssert(nr::dependency::dlss::sdkCompiled(), "DLSS RR was enabled, but the validated NGX bridge could not be loaded.");
+    nrAssert(!input.bypass || input.create.quality == nr::dependency::dlss::Quality::Dlaa,
              "DLSS RR bypass is available only in DLAA mode.");
     nrAssert(input.create.flags.hdr, "DLSS RR requires the HDR feature flag.");
     detail::validateDlssEvaluationConfiguration(input.evaluate);
@@ -727,33 +728,33 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
                  "DLSS RR alpha and color output keys must be different.");
     }
 
-    auto handles = std::array<nr::renderer::GraphResourceHandle, nr::rhi::kDlssRayReconstructionResourceSlotCount>{};
+    auto handles = std::array<nr::renderer::GraphResourceHandle, nr::dependency::dlss::rayReconstructionResourceSlotCount>{};
     auto descriptions = std::array<std::optional<nr::renderer::NodeImageResourceDesc>,
-                                   nr::rhi::kDlssRayReconstructionResourceSlotCount>{};
-    auto indices = std::views::iota(std::size_t{0u}, nr::rhi::kDlssRayReconstructionResourceSlotCount);
+                                   nr::dependency::dlss::rayReconstructionResourceSlotCount>{};
+    auto indices = std::views::iota(std::size_t{0u}, nr::dependency::dlss::rayReconstructionResourceSlotCount);
     std::ranges::for_each(indices, [&](std::size_t index) {
-        auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
+        auto const slot = static_cast<nr::dependency::dlss::RayReconstructionResourceSlot>(index);
         if (!detail::dlssInputResourceActive(input, slot))
         {
             return;
         }
         nrAssert(
-            !input.resourceKeys[index].empty(), "DLSS RR resource '{}' has an empty frame-resource key.", nr::rhi::dlssResourceSlotName(slot));
+            !input.resourceKeys[index].empty(), "DLSS RR resource '{}' has an empty frame-resource key.", nr::dependency::dlss::resourceSlotName(slot));
         handles[index] = context.requireFrameResource(input.resourceKeys[index], "DlssRayReconstruction");
         descriptions[index] = context.describeImageResource(handles[index]);
         nrAssert(descriptions[index].has_value(), "DLSS RR resource '{}' is not an image.", input.resourceKeys[index]);
     });
 
-    auto const colorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Color);
+    auto const colorIndex = detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::Color);
     nrAssert(descriptions[colorIndex].has_value(), "DLSS RR requires the noisy input color image.");
     auto createDesc = input.create;
     if (resolutionSnapshot.has_value())
     {
-        createDesc.renderSize = nr::rhi::DlssDimensions{
+        createDesc.renderSize = nr::dependency::dlss::Dimensions{
             frameParameters.resolutionPlan.renderExtent.width,
             frameParameters.resolutionPlan.renderExtent.height,
         };
-        createDesc.targetSize = nr::rhi::DlssDimensions{
+        createDesc.targetSize = nr::dependency::dlss::Dimensions{
             frameParameters.resolutionPlan.displayExtent.width,
             frameParameters.resolutionPlan.displayExtent.height,
         };
@@ -764,22 +765,22 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
     {
         createDesc.renderSize = input.overrideRenderSize
                                     ? input.renderSizeOverride
-                                    : nr::rhi::DlssDimensions{descriptions[colorIndex]->extent.width,
+                                    : nr::dependency::dlss::Dimensions{descriptions[colorIndex]->extent.width,
                                                               descriptions[colorIndex]->extent.height};
         createDesc.targetSize = input.overrideTargetSize
                                     ? input.targetSizeOverride
-                                    : nr::rhi::DlssDimensions{frameParameters.swapchainExtent.width,
+                                    : nr::dependency::dlss::Dimensions{frameParameters.swapchainExtent.width,
                                                               frameParameters.swapchainExtent.height};
     }
     auto const depthOfFieldGuideIndex =
-        detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::DepthOfFieldGuide);
+        detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::DepthOfFieldGuide);
     detail::validateDlssResolvedConfiguration(createDesc, handles[depthOfFieldGuideIndex].valid());
 
     auto const reflectionMvIndex =
-        detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::ReflectionMotionVectors);
+        detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::ReflectionMotionVectors);
     auto const gBufferSpecularMvIndex =
-        detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::GBufferSpecularMotionVectors);
-    auto const specularHitIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::SpecularHitDistance);
+        detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::GBufferSpecularMotionVectors);
+    auto const specularHitIndex = detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::SpecularHitDistance);
     auto const hasReflectionMotionVectors =
         handles[reflectionMvIndex].valid() || handles[gBufferSpecularMvIndex].valid();
     auto const hasSpecularHitDistance = handles[specularHitIndex].valid();
@@ -792,7 +793,7 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
 
     auto const outputColorExtent = detail::outputExtent(
         createDesc.targetSize,
-        input.evaluate.subrectBases[detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::Output)],
+        input.evaluate.subrectBases[detail::subrectSlotIndex(nr::dependency::dlss::RayReconstructionSubrectSlot::Output)],
         createDesc.enableOutputSubrects, "color");
     auto outputColor = context.addResource(nr::renderer::GraphTransientImageDesc{
         .debugName = "DLSS.RR.OutputColor",
@@ -805,8 +806,8 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
                 nr::renderer::ImageUsageIntent::TransferSrc,
             },
     });
-    handles[detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Output)] = outputColor;
-    descriptions[detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Output)] =
+    handles[detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::Output)] = outputColor;
+    descriptions[detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::Output)] =
         nr::renderer::NodeImageResourceDesc{
             .debugName = "DLSS.RR.OutputColor",
             .extent = outputColorExtent,
@@ -819,7 +820,7 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
         auto const outputAlphaExtent = detail::outputExtent(
             createDesc.targetSize,
             input.evaluate
-                .subrectBases[detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::OutputAlpha)],
+                .subrectBases[detail::subrectSlotIndex(nr::dependency::dlss::RayReconstructionSubrectSlot::OutputAlpha)],
             createDesc.enableOutputSubrects, "alpha");
         outputAlpha = context.addResource(nr::renderer::GraphTransientImageDesc{
             .debugName = "DLSS.RR.OutputAlpha",
@@ -832,7 +833,7 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
                     nr::renderer::ImageUsageIntent::TransferSrc,
                 },
         });
-        auto const outputAlphaIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha);
+        auto const outputAlphaIndex = detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::OutputAlpha);
         handles[outputAlphaIndex] = outputAlpha;
         descriptions[outputAlphaIndex] = nr::renderer::NodeImageResourceDesc{
             .debugName = "DLSS.RR.OutputAlpha",
@@ -843,7 +844,7 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
 
     detail::validateActiveSubrectBounds(descriptions, input.evaluate.subrectBases, createDesc);
 
-    auto evalDesc = nr::rhi::DlssRayReconstructionEvalDesc{};
+    auto evalDesc = nr::dependency::dlss::RayReconstructionEvalDesc{};
     evalDesc.subrectBases = input.evaluate.subrectBases;
     evalDesc.renderSubrectDimensions = createDesc.renderSize;
     evalDesc.motionVectorScale = input.evaluate.motionVectorScale;
@@ -878,13 +879,13 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
                                               : input.evaluate.manualFrameTimeDeltaMilliseconds;
 
     auto intents = std::vector<nr::renderer::PassResourceUseDesc>{};
-    intents.reserve(nr::rhi::kDlssRayReconstructionResourceSlotCount);
+    intents.reserve(nr::dependency::dlss::rayReconstructionResourceSlotCount);
     std::ranges::for_each(indices, [&](std::size_t index) {
         if (!handles[index].valid())
             return;
-        auto const slot = static_cast<nr::rhi::DlssRayReconstructionResourceSlot>(index);
-        if (slot == nr::rhi::DlssRayReconstructionResourceSlot::Output ||
-            slot == nr::rhi::DlssRayReconstructionResourceSlot::OutputAlpha)
+        auto const slot = static_cast<nr::dependency::dlss::RayReconstructionResourceSlot>(index);
+        if (slot == nr::dependency::dlss::RayReconstructionResourceSlot::Output ||
+            slot == nr::dependency::dlss::RayReconstructionResourceSlot::OutputAlpha)
         {
             intents.push_back(nr::renderer::use::storageWrite(handles[index]));
             return;
@@ -907,14 +908,14 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
 
     if (input.evaluate.visualizeMotionVectors)
     {
-        auto const motionVectorIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors);
+        auto const motionVectorIndex = detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::MotionVectors);
         auto const motionVectorSubrectIndex =
-            detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::MotionVectors);
-        auto const outputSubrectIndex = detail::subrectSlotIndex(nr::rhi::DlssRayReconstructionSubrectSlot::Output);
+            detail::subrectSlotIndex(nr::dependency::dlss::RayReconstructionSubrectSlot::MotionVectors);
+        auto const outputSubrectIndex = detail::subrectSlotIndex(nr::dependency::dlss::RayReconstructionSubrectSlot::Output);
         auto const motionVectorSize =
-            detail::requiredSubrectDimensions(nr::rhi::DlssRayReconstructionResourceSlot::MotionVectors, createDesc);
+            detail::requiredSubrectDimensions(nr::dependency::dlss::RayReconstructionResourceSlot::MotionVectors, createDesc);
         auto const outputBase = createDesc.enableOutputSubrects ? input.evaluate.subrectBases[outputSubrectIndex]
-                                                                : nr::rhi::DlssCoordinates{};
+                                                                : nr::dependency::dlss::Coordinates{};
         auto const motionVectorBase = input.evaluate.subrectBases[motionVectorSubrectIndex];
         auto const pushConstants = detail::DlssMotionVectorDebugPushConstants{
             .outputBase = {outputBase.x, outputBase.y},
@@ -949,7 +950,7 @@ void DlssRayReconstructionNode::materializeCurrentFrame(NodeBuildContext &contex
         auto publishedAlpha = outputAlpha;
         if (input.bypass)
         {
-            auto const alphaIndex = detail::slotIndex(nr::rhi::DlssRayReconstructionResourceSlot::Alpha);
+            auto const alphaIndex = detail::slotIndex(nr::dependency::dlss::RayReconstructionResourceSlot::Alpha);
             nrAssert(handles[alphaIndex].valid(), "DLSS RR alpha bypass requires the input alpha resource.");
             publishedAlpha = handles[alphaIndex];
         }

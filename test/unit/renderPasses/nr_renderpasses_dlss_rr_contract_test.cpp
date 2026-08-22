@@ -1,4 +1,5 @@
 import std;
+import dependency.dlss;
 import dependency.math;
 import dependency.vulkan;
 import nr.renderPasses;
@@ -12,33 +13,33 @@ static_assert(sizeof(DirectX::XMFLOAT4X4) == 64u);
 static_assert(std::is_standard_layout_v<DirectX::XMFLOAT4X4>);
 static_assert(std::is_trivially_copyable_v<DirectX::XMFLOAT4X4>);
 
-[[nodiscard]] nr::rhi::DlssOptimalSettings makeOptimalSettings(nr::rhi::DlssDimensions targetSize,
-                                                               nr::rhi::DlssQuality quality)
+[[nodiscard]] nr::dependency::dlss::OptimalSettings makeOptimalSettings(nr::dependency::dlss::Dimensions targetSize,
+                                                               nr::dependency::dlss::Quality quality)
 {
     auto divisor = std::uint32_t{2u};
     switch (quality)
     {
-    case nr::rhi::DlssQuality::Performance:
+    case nr::dependency::dlss::Quality::Performance:
         divisor = 4u;
         break;
-    case nr::rhi::DlssQuality::Balanced:
+    case nr::dependency::dlss::Quality::Balanced:
         divisor = 3u;
         break;
-    case nr::rhi::DlssQuality::Quality:
+    case nr::dependency::dlss::Quality::Quality:
         divisor = 2u;
         break;
-    case nr::rhi::DlssQuality::UltraPerformance:
+    case nr::dependency::dlss::Quality::UltraPerformance:
         divisor = 5u;
         break;
-    case nr::rhi::DlssQuality::Dlaa:
+    case nr::dependency::dlss::Quality::Dlaa:
         divisor = 1u;
         break;
-    case nr::rhi::DlssQuality::Count:
+    case nr::dependency::dlss::Quality::Count:
         std::unreachable();
     }
-    return nr::rhi::DlssOptimalSettings{
-        .optimalRenderSize = nr::rhi::DlssDimensions{targetSize.width / divisor, targetSize.height / divisor},
-        .minimumRenderSize = nr::rhi::DlssDimensions{1u, 1u},
+    return nr::dependency::dlss::OptimalSettings{
+        .optimalRenderSize = nr::dependency::dlss::Dimensions{targetSize.width / divisor, targetSize.height / divisor},
+        .minimumRenderSize = nr::dependency::dlss::Dimensions{1u, 1u},
         .maximumRenderSize = targetSize,
     };
 }
@@ -47,28 +48,28 @@ const nr::test::CaseRegistrar dlssRrPublicContractCase{
     "renderpasses DLSS RR keeps its complete disabled-by-default contract", [] {
         auto input = nr::renderPasses::makeDefaultDlssRayReconstructionNodeInput();
         nr::test::require(!input.enabled, "DLSS RR must be disabled by default");
-        nr::test::requireEqual(nr::rhi::kDlssRayReconstructionResourceSlotCount, std::size_t{64u});
-        nr::test::requireEqual(nr::rhi::kDlssRayReconstructionSubrectSlotCount, std::size_t{39u});
+        nr::test::requireEqual(nr::dependency::dlss::rayReconstructionResourceSlotCount, std::size_t{64u});
+        nr::test::requireEqual(nr::dependency::dlss::rayReconstructionSubrectSlotCount, std::size_t{39u});
         nr::test::require(input.create.flags.hdr, "RR default creation must request HDR");
         nr::test::require(!input.create.flags.motionVectorsJittered,
                           "RR defaults must continue to consume unjittered motion vectors");
         nr::test::requireEqual(input.evaluate.motionVectorScale, std::array{1.0f, 1.0f});
         nr::test::require(!input.evaluate.visualizeMotionVectors);
-        nr::test::requireEqual(input.create.quality, nr::rhi::DlssQuality::Quality);
-        nr::test::requireEqual(input.create.roughnessMode, nr::rhi::DlssRoughnessMode::Packed);
+        nr::test::requireEqual(input.create.quality, nr::dependency::dlss::Quality::Quality);
+        nr::test::requireEqual(input.create.roughnessMode, nr::dependency::dlss::RoughnessMode::Packed);
         nr::test::requireEqual(std::ranges::count(input.includeResources, true), std::ptrdiff_t{7});
         nr::test::require(input.includeResources[static_cast<std::size_t>(
-                              nr::rhi::DlssRayReconstructionResourceSlot::SpecularHitDistance)]);
+                              nr::dependency::dlss::RayReconstructionResourceSlot::SpecularHitDistance)]);
         nr::test::require(!input.includeResources[static_cast<std::size_t>(
-                              nr::rhi::DlssRayReconstructionResourceSlot::DisocclusionMask)]);
+                              nr::dependency::dlss::RayReconstructionResourceSlot::DisocclusionMask)]);
         nr::test::require(nr::renderPasses::dlssRayReconstructionResourceRequired(
-                              nr::rhi::DlssRayReconstructionResourceSlot::Color, input.create.roughnessMode, false));
+                              nr::dependency::dlss::RayReconstructionResourceSlot::Color, input.create.roughnessMode, false));
         nr::test::require(!nr::renderPasses::dlssRayReconstructionResourceRequired(
-                              nr::rhi::DlssRayReconstructionResourceSlot::Roughness,
-                              nr::rhi::DlssRoughnessMode::Packed, false));
+                              nr::dependency::dlss::RayReconstructionResourceSlot::Roughness,
+                              nr::dependency::dlss::RoughnessMode::Packed, false));
         nr::test::require(nr::renderPasses::dlssRayReconstructionResourceRequired(
-                              nr::rhi::DlssRayReconstructionResourceSlot::Roughness,
-                              nr::rhi::DlssRoughnessMode::Unpacked, false));
+                              nr::dependency::dlss::RayReconstructionResourceSlot::Roughness,
+                              nr::dependency::dlss::RoughnessMode::Unpacked, false));
     }};
 
 const nr::test::CaseRegistrar dlssRrResolutionControllerCase{
@@ -76,7 +77,7 @@ const nr::test::CaseRegistrar dlssRrResolutionControllerCase{
         auto controller = nr::renderPasses::DlssRayReconstructionResolutionController{};
         auto queryCount = std::size_t{0u};
         auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
-            [&](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+            [&](nr::dependency::dlss::Dimensions targetSize, nr::dependency::dlss::Quality quality) {
                 ++queryCount;
                 return makeOptimalSettings(targetSize, quality);
             }};
@@ -90,7 +91,7 @@ const nr::test::CaseRegistrar dlssRrResolutionControllerCase{
 
         auto qualityRequest = nr::renderPasses::DlssRayReconstructionResolutionRequest{
             .enabled = true,
-            .quality = nr::rhi::DlssQuality::Quality,
+            .quality = nr::dependency::dlss::Quality::Quality,
         };
         auto quality = controller.resolve(qualityRequest, display, query);
         nr::test::requireEqual(quality.renderExtent, vk::Extent2D{800u, 450u});
@@ -101,7 +102,7 @@ const nr::test::CaseRegistrar dlssRrResolutionControllerCase{
         nr::test::require(!qualityCacheHit.resetHistory);
         nr::test::requireEqual(queryCount, std::size_t{1u});
 
-        qualityRequest.quality = nr::rhi::DlssQuality::Performance;
+        qualityRequest.quality = nr::dependency::dlss::Quality::Performance;
         auto performance = controller.resolve(qualityRequest, display, query);
         nr::test::requireEqual(performance.renderExtent, vk::Extent2D{400u, 225u});
         nr::test::require(performance.resetHistory);
@@ -115,7 +116,7 @@ const nr::test::CaseRegistrar dlssRrResolutionControllerCase{
 
         auto dlaaRequest = nr::renderPasses::DlssRayReconstructionResolutionRequest{
             .enabled = true,
-            .quality = nr::rhi::DlssQuality::Dlaa,
+            .quality = nr::dependency::dlss::Quality::Dlaa,
         };
         auto dlaa = controller.resolve(dlaaRequest, resizedDisplay, query);
         nr::test::requireEqual(dlaa.renderExtent, resizedDisplay);

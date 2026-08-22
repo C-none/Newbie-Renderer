@@ -44,18 +44,17 @@ class CommandPool
     CommandPool &operator=(CommandPool &&) noexcept = default;
 
     /**
-     * @brief Allocate multiple primary command buffers
+     * @brief Allocate multiple command buffers at the given level
+     * @tparam Level Command buffer level (primary or secondary)
      * @param count Number of buffers to allocate
      * @return RAII command buffers container
      */
-    [[nodiscard]] vk::raii::CommandBuffers allocatePrimary(std::uint32_t count = 1);
-
-    /**
-     * @brief Allocate multiple secondary command buffers
-     * @param count Number of buffers to allocate
-     * @return RAII command buffers container
-     */
-    [[nodiscard]] vk::raii::CommandBuffers allocateSecondary(std::uint32_t count = 1);
+    template <vk::CommandBufferLevel Level>
+    [[nodiscard]] vk::raii::CommandBuffers allocate(std::uint32_t count = 1)
+    {
+        vk::CommandBufferAllocateInfo allocInfo{*pool_, Level, count};
+        return vk::raii::CommandBuffers(device_->get(), allocInfo);
+    }
 
     /**
      * @brief Reset all command buffers in this pool

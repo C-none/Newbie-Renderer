@@ -10,13 +10,11 @@ import std;
 
 namespace nr::rhi
 {
-void MemoryAllocator::initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
+MemoryAllocator::MemoryAllocator(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
                                  const vk::raii::Device &device)
+    : vma_(instance, physDevice, device),
+      nsightProfilerActive_(nr::platform::isNsightInjected() || nsightGraphicsActivityRequested())
 {
-    vma_ = VmaAllocatorWrapper(instance, physDevice, device);
-
-    nsightProfilerActive_ = nr::platform::isNsightInjected() || nsightGraphicsActivityRequested();
-
     createPerFramePools();
 
     if (nsightProfilerActive_)

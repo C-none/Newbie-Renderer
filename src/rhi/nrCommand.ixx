@@ -2,115 +2,60 @@ export module nr.rhi:command;
 import dependency.vulkan;
 import nr.utils;
 import std;
+import :commandBatch;
+import :commandPool;
+import :queue;
 
 export namespace nr::rhi
 {
 
 /**
- * @brief Lightweight helper for command buffer recording
- * 
- * Design Philosophy:
- * - Stateless utility class (no state stored)
- * - Thin wrapper around vk::raii::CommandBuffer begin/end
- * - Works exclusively with vk::raii::CommandBuffer
- * - Does NOT own command buffers
- * - Does NOT know about pools or queues
- * 
- * Usage:
- *   auto cb = pool.allocatePrimary();
- *   CommandRecorder::beginPrimary(cb.front());
- *   // ... vk::raii::CommandBuffer member calls ...
- *   CommandRecorder::end(cb.front());
+ * @brief Semaphore wait applied before one-shot command execution.
+ *
+ * A default-constructed plan carries a null semaphore and requests no wait.
  */
-class CommandRecorder
+struct OneShotSyncPlan
 {
-  public:
-    // Stateless - all methods are static
-
-    /**
-     * @brief Begin recording primary command buffer
-     * @param commandBuffer RAII command buffer to begin
-     * @param flags Optional begin flags (e.g., ONE_TIME_SUBMIT)
-     */
-    static void beginPrimary(const vk::raii::CommandBuffer &commandBuffer, vk::CommandBufferUsageFlags flags = {});
-
-    /**
-     * @brief Begin recording secondary command buffer
-     * @param commandBuffer RAII command buffer to begin
-     * @param inheritanceInfo Render pass or dynamic rendering compatibility information
-     * @param flags Begin flags provided by caller
-     * 
-     * Secondary command buffers are executed through vk::raii::CommandBuffer::executeCommands.
-     * They do not inherit ordinary graphics state such as pipeline, descriptor sets,
-     * push constants, vertex/index buffers, viewport, scissor, or dynamic raster state.
-     */
-    static void beginSecondary(const vk::raii::CommandBuffer &commandBuffer,
-                               const vk::CommandBufferInheritanceInfo &inheritanceInfo,
-                               vk::CommandBufferUsageFlags flags = {});
-
-    /**
-     * @brief End command buffer recording
-     * @param commandBuffer RAII command buffer to end
-     */
-    static void end(const vk::raii::CommandBuffer &commandBuffer);
+    vk::Semaphore waitSemaphore{};
+    vk::PipelineStageFlags2 waitStage = vk::PipelineStageFlagBits2::eAllCommands;
+    std::uint64_t waitValue = 0;
 };
 
 /**
- * @brief RAII wrapper for command buffer RECORDING scope (begin/end)
- * 
- * IMPORTANT: This is different from vk::raii::CommandBuffer!
- * - vk::raii::CommandBuffer: Manages MEMORY lifetime (allocate/free)
- * - ScopedCommandBuffer: Manages RECORDING scope (begin/end)
- * 
- * Usage with RAII command buffer:
- *   auto commandBuffers = pool.allocatePrimary(1); // RAII for memory
- *   const auto& cb = commandBuffers.front();
- *   {
- *       ScopedCommandBuffer scoped(cb, flags);  // RAII for recording
- *       // ... vk::raii::CommandBuffer member calls ...
- *   } // Automatically calls end()
- *   // cb still valid, can be submitted
+ * @brief Record a primary command buffer with eOneTimeSubmit, submit it, and block until completion.
+ *
+ * Owns the transient command pool and the binary fence. Fence completion implies
+ * the entire one-shot queue submission finished, so no post-completion cleanup
+ * depends on a broader device/queue idle state.
  */
-class ScopedCommandBuffer
+template <std::invocable<const vk::raii::CommandBuffer &> TRecord>
+void submitOneShot(const vk::raii::Device &device, GpuQueue &queue, const OneShotSyncPlan &sync, TRecord &&record)
 {
-  public:
-    /**
-     * @brief Begin primary command buffer, end on destruction
-     * @param commandBuffer RAII command buffer (manages memory lifetime)
-     * @param flags Recording flags (e.g., ONE_TIME_SUBMIT for single use)
-     * 
-     * Usage - combines both RAII types:
-     *   vk::raii::CommandBuffer cb = ...;  // memory RAII
-     *   ScopedCommandBuffer scoped(cb);    // recording RAII
-     */
-    explicit ScopedCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, vk::CommandBufferUsageFlags flags = {});
+    auto commandPool = CommandPool{device, queue.queueFamilyIndex(), vk::CommandPoolCreateFlagBits::eTransient};
+    auto commandBuffers = commandPool.allocate<vk::CommandBufferLevel::ePrimary>(1u);
+    nrAssert(!commandBuffers.empty(), "submitOneShot failed to allocate a command buffer.");
+    auto &commandBuffer = commandBuffers.front();
 
-    /**
-     * @brief Begin secondary command buffer, end on destruction
-     * @param commandBuffer RAII command buffer
-     * @param inheritanceInfo Render pass inheritance information
-     * @param flags Recording flags provided by caller
-     */
-    ScopedCommandBuffer(const vk::raii::CommandBuffer &commandBuffer,
-                        const vk::CommandBufferInheritanceInfo &inheritanceInfo,
-                        vk::CommandBufferUsageFlags flags = {});
+    commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    std::invoke(std::forward<TRecord>(record), commandBuffer);
+    commandBuffer.end();
 
-    ~ScopedCommandBuffer();
+    auto fence = vk::raii::Fence(device, vk::FenceCreateInfo{});
+    if (sync.waitSemaphore == vk::Semaphore{})
+    {
+        queue.submit(commandBuffer, std::cref(fence));
+    }
+    else
+    {
+        auto batch = CommandBatch{};
+        batch.addWait(sync.waitSemaphore, sync.waitStage, sync.waitValue);
+        batch.addCommandBuffer(commandBuffer);
+        queue.submit(std::move(batch), std::cref(fence));
+    }
 
-    // Non-copyable, non-movable (RAII lifetime bound to scope)
-    ScopedCommandBuffer(const ScopedCommandBuffer &) = delete;
-    ScopedCommandBuffer &operator=(const ScopedCommandBuffer &) = delete;
-    ScopedCommandBuffer(ScopedCommandBuffer &&) = delete;
-    ScopedCommandBuffer &operator=(ScopedCommandBuffer &&) = delete;
-
-    /**
-     * @brief Get the wrapped command buffer for recording commands
-     */
-    [[nodiscard]] const vk::raii::CommandBuffer &get() const noexcept;
-
-  private:
-    const vk::raii::CommandBuffer &commandBuffer_;
-};
+    auto const waitResult = device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
+    nrAssert(waitResult == vk::Result::eSuccess, "submitOneShot failed waiting for one-shot command completion.");
+}
 
 /**
  * @brief RAII wrapper for command buffer debug label scope
@@ -141,8 +86,8 @@ class ScopedCommandBufferDebugLabel
     void close();
 
   private:
-    std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer_{};
-    std::string label_{};
+    std::optional<std::reference_wrapper<const vk::raii::CommandBuffer>> commandBuffer_;
+    std::string label_;
     bool active_ = false;
 };
 

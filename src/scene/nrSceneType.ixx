@@ -276,6 +276,10 @@ static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::transmission)
               static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::transmission));
 static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::anisotropy) ==
               static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::anisotropy));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::specular) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::specular));
+static_assert(static_cast<std::uint32_t>(SceneMaterialTextureSlot::specularColor) ==
+              static_cast<std::uint32_t>(nr::resource::MaterialTextureSlotSemantic::specularColor));
 
 using SceneMaterialTextureIds = std::array<SceneTextureId, sceneMaterialTextureSlotCount>;
 

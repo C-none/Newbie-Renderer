@@ -1,6 +1,7 @@
 module nr.rhi;
 
 import :dlss;
+import :command;
 import nr.utils;
 import std;
 
@@ -22,23 +23,36 @@ bool DlssContext::valid() const noexcept
     return context_.valid();
 }
 
-const DlssStatus &DlssContext::status() const noexcept
+const nr::dependency::dlss::Status &DlssContext::status() const noexcept
 {
     return context_.status();
 }
 
-DlssOptimalSettings DlssContext::optimalSettings(DlssDimensions targetSize, DlssQuality quality)
+nr::dependency::dlss::OptimalSettings DlssContext::optimalSettings(nr::dependency::dlss::Dimensions targetSize,
+                                                                   nr::dependency::dlss::Quality quality)
 {
     return context_.optimalSettings(targetSize, quality);
 }
 
-DlssRayReconstructionFeature::DlssRayReconstructionFeature(std::shared_ptr<DlssContext> context,
-                                                           const vk::raii::CommandBuffer &commandBuffer,
-                                                           const DlssRayReconstructionCreateDesc &desc)
+DlssRayReconstructionFeature::DlssRayReconstructionFeature(
+    std::shared_ptr<DlssContext> context, const vk::raii::CommandBuffer &commandBuffer,
+    const nr::dependency::dlss::RayReconstructionCreateDesc &desc)
     : context_(std::move(context))
 {
     nrAssert(static_cast<bool>(context_), "DLSS RR feature creation requires a shared device context.");
     feature_ = context_->context_.createRayReconstruction(static_cast<vk::CommandBuffer>(*commandBuffer), desc);
+}
+
+std::unique_ptr<DlssRayReconstructionFeature> DlssRayReconstructionFeature::create(
+    std::shared_ptr<DlssContext> context, const vk::raii::Device &device, GpuQueue &queue,
+    const nr::dependency::dlss::RayReconstructionCreateDesc &desc)
+{
+    std::unique_ptr<DlssRayReconstructionFeature> feature{};
+    submitOneShot(device, queue, {}, [&](const vk::raii::CommandBuffer &commandBuffer) {
+        feature = std::make_unique<DlssRayReconstructionFeature>(std::move(context), commandBuffer, desc);
+    });
+    nrAssert(feature->valid(), "DLSS RR feature creation failed: {}", feature->status().message);
+    return feature;
 }
 
 DlssRayReconstructionFeature::~DlssRayReconstructionFeature() = default;
@@ -62,41 +76,16 @@ bool DlssRayReconstructionFeature::valid() const noexcept
     return feature_ && feature_->valid();
 }
 
-const DlssStatus &DlssRayReconstructionFeature::status() const noexcept
+const nr::dependency::dlss::Status &DlssRayReconstructionFeature::status() const noexcept
 {
     nrAssert(static_cast<bool>(feature_), "DLSS RR status requires a feature object.");
     return feature_->status();
 }
 
-DlssStatus DlssRayReconstructionFeature::evaluate(const vk::raii::CommandBuffer &commandBuffer,
-                                                  const DlssRayReconstructionEvalDesc &desc)
+nr::dependency::dlss::Status DlssRayReconstructionFeature::evaluate(
+    const vk::raii::CommandBuffer &commandBuffer, const nr::dependency::dlss::RayReconstructionEvalDesc &desc)
 {
     nrAssert(valid(), "DLSS RR evaluation requires a valid feature.");
     return feature_->evaluate(static_cast<vk::CommandBuffer>(*commandBuffer), desc);
-}
-
-bool dlssSdkCompiled() noexcept
-{
-    return nr::dependency::dlss::sdkCompiled();
-}
-
-std::string_view dlssQualityName(DlssQuality quality) noexcept
-{
-    return nr::dependency::dlss::qualityName(quality);
-}
-
-std::string_view dlssPresetName(DlssRayReconstructionPreset preset) noexcept
-{
-    return nr::dependency::dlss::presetName(preset);
-}
-
-std::string_view dlssResourceSlotName(DlssRayReconstructionResourceSlot slot) noexcept
-{
-    return nr::dependency::dlss::resourceSlotName(slot);
-}
-
-std::string_view dlssSubrectSlotName(DlssRayReconstructionSubrectSlot slot) noexcept
-{
-    return nr::dependency::dlss::subrectSlotName(slot);
 }
 } // namespace nr::rhi

@@ -1,4 +1,5 @@
 import std;
+import dependency.dlss;
 import dependency.math;
 import dependency.vulkan;
 import nr.app;
@@ -25,8 +26,8 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
     auto dlssResolutionController = std::make_shared<nr::renderPasses::DlssRayReconstructionResolutionController>();
     dlssRayReconstruction->setResolutionController(dlssResolutionController);
     dlssRayReconstruction->input.enabled = true;
-    dlssRayReconstruction->input.create.quality = nr::rhi::DlssQuality::Dlaa;
-    dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
+    dlssRayReconstruction->input.create.quality = nr::dependency::dlss::Quality::Dlaa;
+    dlssRayReconstruction->input.create.depthType = nr::dependency::dlss::DepthType::Hardware;
     dlssRayReconstruction->input.evaluate.visualizeMotionVectors = true;
     dlssRayReconstruction->input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor};
 
@@ -42,7 +43,7 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
                                             nr::rhi::Device &device, vk::Extent2D displayExtent,
                                             const nr::options::OptionFrameSnapshot &snapshot) {
         auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
-            [&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+            [&device](nr::dependency::dlss::Dimensions targetSize, nr::dependency::dlss::Quality quality) {
                 return device.dlssContext()->optimalSettings(targetSize, quality);
             }};
         return controller->resolve(nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot), displayExtent, query);
@@ -154,7 +155,7 @@ constexpr auto kMaxResizeRetries = std::uint32_t{3u};
             return;
         }
 
-        presentation.pollEvents();
+        presentation.windowInput().pollEvents();
         auto frameResult = renderer.renderFrame(nr::renderer::RendererFrameInput{
             .optionSnapshot = std::cref(optionSnapshot),
             .scene = std::ref(scene),

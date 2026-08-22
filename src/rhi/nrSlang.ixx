@@ -396,7 +396,6 @@ struct RuntimeSlangCompilerOption
 
 struct RuntimeSlangCompileOptions
 {
-    std::vector<std::string> searchPaths;
     std::vector<RuntimeSlangMacro> macros;
     SlangCompileTarget target = SLANG_SPIRV;
     std::string profile = "SPIRV_1_6";
@@ -461,9 +460,6 @@ class ShaderService
         RuntimeSlangCompileOptions runtimeOptions;
         runtimeOptions.target = options.target;
         runtimeOptions.profile = std::string(options.profile);
-        runtimeOptions.searchPaths = options.searchPaths |
-                                     std::views::transform([](std::string_view value) { return std::string(value); }) |
-                                     std::ranges::to<std::vector>();
         runtimeOptions.macros = options.macros | std::views::transform([](const SlangMacro &macro) {
                                     return RuntimeSlangMacro{
                                         .name = std::string(macro.name),
@@ -491,7 +487,6 @@ class ShaderService
     {
         auto runtimeOptions = materializeRuntimeOptions(options);
         auto resolvedShaderRootPath = detail::resolveShaderRootPath();
-        runtimeOptions.searchPaths = {resolvedShaderRootPath.generic_string()};
 
         auto hashHex = hash::toHexString(options.hashHex);
         if (m_session && m_optionsHashHex == hashHex)
@@ -550,7 +545,7 @@ class ShaderService
 
     RuntimeSlangCompileOptions m_options;
     std::string m_optionsHashHex = hash::toHexString(kDefaultSlangCompileOptions.hashHex);
-    std::filesystem::path m_shaderRootPath = detail::resolveShaderRootPath();
+    std::filesystem::path m_shaderRootPath;
 
     std::vector<std::string> m_effectiveSearchPaths;
     std::vector<const char *> m_searchPathPointers;

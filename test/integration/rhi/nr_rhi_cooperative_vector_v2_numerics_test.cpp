@@ -164,18 +164,13 @@ static_assert(sizeof(CoopVecV2NumericsPushConstants) == 36u);
 
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeComputeUploadPlan(const nr::rhi::Device &device)
 {
-    return nr::rhi::ops::BufferUploadOwnershipPlan{
-        .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-            device.queueManager.transfer().queueFamilyIndex(), device.queueManager.compute().queueFamilyIndex(),
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eAllCommands,
-                .access = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-            }),
-    };
+    auto const queueFamilies = device.queueManager.familyIndices();
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.compute,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eAllCommands,
+                                                             .access = vk::AccessFlagBits2::eMemoryRead |
+                                                                       vk::AccessFlagBits2::eMemoryWrite,
+                                                         });
 }
 
 void acquireUploadsOnCompute(nr::rhi::Device &device, std::span<const nr::rhi::ops::BufferUploadTicket> tickets)
@@ -183,25 +178,17 @@ void acquireUploadsOnCompute(nr::rhi::Device &device, std::span<const nr::rhi::o
     nr::test::require(!tickets.empty() &&
                           std::ranges::all_of(tickets, [](const auto &ticket) { return ticket.valid(); }),
                       "CoopVec numerical test uploads must all succeed before their compute acquire");
-    auto commandPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.compute().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1u);
-    auto const &commandBuffer = commandBuffers.front();
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    std::ranges::for_each(tickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
-        device.uploadReadback().recordAcquireBarrier(commandBuffer, ticket);
-    });
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addWait(device.uploadReadback().uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
-                  tickets.back().signalValue);
-    batch.addCommandBuffer(commandBuffer);
-    device.queueManager.compute().submit(std::move(batch));
-    device.queueManager.compute().waitIdle();
+    nr::rhi::submitOneShot(device.device, device.queueManager.compute(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *device.uploadReadback().uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eAllCommands,
+                               .waitValue = tickets.back().signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               std::ranges::for_each(tickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
+                                   device.uploadReadback().recordAcquireBarrier(commandBuffer, ticket);
+                               });
+                           });
 }
 
 void bindBuffer(const nr::rhi::ShaderCursor &root, std::string_view name, const nr::rhi::Buffer &buffer)
@@ -384,8 +371,7 @@ void requireAdamAndFp16Mirror(const std::vector<float> &master, const std::vecto
 
 const nr::test::CaseRegistrar cooperativeVectorV2NumericsCase{
     "rhi cooperative-vector V2 affine numerics agree with FP32 references", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_cooperative_vector_v2_numerics_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_cooperative_vector_v2_numerics_test", "NewbieRenderer");
         auto const &capabilities = device.cooperativeVectorCapabilities();
         nr::test::require(capabilities.computeStage && capabilities.trainingFloat16Accumulation &&
                               capabilities.fullFloat16TupleWithTranspose,
@@ -421,8 +407,10 @@ const nr::test::CaseRegistrar cooperativeVectorV2NumericsCase{
                 .columns = layer.columns,
                 .layout = nr::rhi::CooperativeVectorMatrixLayout::TrainingOptimal,
             };
-            rowMajorSizes[layerIndex] = device.cooperativeVectorMatrixLayoutSize(rowMajorDescs[layerIndex]);
-            optimalSizes[layerIndex] = device.cooperativeVectorMatrixLayoutSize(optimalDescs[layerIndex]);
+            rowMajorSizes[layerIndex] =
+                nr::rhi::queryCooperativeVectorMatrixLayoutSize(device.device, rowMajorDescs[layerIndex]);
+            optimalSizes[layerIndex] =
+                nr::rhi::queryCooperativeVectorMatrixLayoutSize(device.device, optimalDescs[layerIndex]);
             optimalBytes = (optimalBytes + nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment - 1u) &
                            ~(nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment - 1u);
             optimalOffsets[layerIndex] = optimalBytes;
@@ -490,33 +478,29 @@ const nr::test::CaseRegistrar cooperativeVectorV2NumericsCase{
         });
         setPushConstants(bindings, "gNumerics", pushConstants);
 
-        auto commandPool = nr::rhi::CommandPool{
-            device.device,
-            device.queueManager.compute().queueFamilyIndex(),
-            vk::CommandPoolCreateFlagBits::eTransient,
-        };
-        auto commandBuffers = commandPool.allocatePrimary(1u);
-        auto const &commandBuffer = commandBuffers.front();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-        recordDispatch(commandBuffer, pipeline, bindings, static_cast<std::uint32_t>(kLayerCount) * kContributionCount);
-        recordComputeToConversionBarrier(commandBuffer);
-        std::ranges::for_each(std::views::iota(std::size_t{0u}, kLayerCount), [&](std::size_t layerIndex) {
-            device.recordCooperativeVectorMatrixConversion(
-                commandBuffer,
-                nr::rhi::CooperativeVectorMatrixMemory{
-                    .deviceAddress = optimalBuffer.deviceAddress() + optimalOffsets[layerIndex],
-                    .size = optimalSizes[layerIndex].byteSize,
-                },
-                optimalDescs[layerIndex], optimalSizes[layerIndex],
-                nr::rhi::CooperativeVectorMatrixMemory{
-                    .deviceAddress = rowMajorBuffer.deviceAddress() + kLayers[layerIndex].weightOffsetBytes,
-                    .size = rowMajorSizes[layerIndex].byteSize,
-                },
-                rowMajorDescs[layerIndex], rowMajorSizes[layerIndex]);
-        });
-        nr::rhi::CommandRecorder::end(commandBuffer);
-        device.queueManager.compute().submit(commandBuffer);
-        device.queueManager.compute().waitIdle();
+        nr::rhi::submitOneShot(device.device, device.queueManager.compute(), {},
+                               [&](const vk::raii::CommandBuffer &commandBuffer) {
+                                   recordDispatch(commandBuffer, pipeline, bindings,
+                                                  static_cast<std::uint32_t>(kLayerCount) * kContributionCount);
+                                   recordComputeToConversionBarrier(commandBuffer);
+                                   std::ranges::for_each(
+                                       std::views::iota(std::size_t{0u}, kLayerCount), [&](std::size_t layerIndex) {
+                                           nr::rhi::recordCooperativeVectorMatrixConversion(
+                                               commandBuffer,
+                                               nr::rhi::CooperativeVectorMatrixMemory{
+                                                   .deviceAddress =
+                                                       optimalBuffer.deviceAddress() + optimalOffsets[layerIndex],
+                                                   .size = optimalSizes[layerIndex].byteSize,
+                                               },
+                                               optimalDescs[layerIndex], optimalSizes[layerIndex],
+                                               nr::rhi::CooperativeVectorMatrixMemory{
+                                                   .deviceAddress = rowMajorBuffer.deviceAddress() +
+                                                                    kLayers[layerIndex].weightOffsetBytes,
+                                                   .size = rowMajorSizes[layerIndex].byteSize,
+                                               },
+                                               rowMajorDescs[layerIndex], rowMajorSizes[layerIndex]);
+                                       });
+                               });
 
         auto const shaderWriteScope = nr::rhi::ops::ReadbackSyncScope{
             .stages = vk::PipelineStageFlagBits2::eComputeShader,

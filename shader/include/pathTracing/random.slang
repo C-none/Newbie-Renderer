@@ -203,12 +203,11 @@ public struct RandomSequence
                kInvTwoPow24;
     }
 
-    // Advance exactly as three discarded rand4() packets. sobolSamplerCore()
-    // evolves the LCG five times per packet, and this affine jump is the
-    // closed-form composition of all fifteen seed steps modulo 2^32.
+    // Advance exactly as four discarded rand4() packets. This composes the
+    // twenty LCG seed steps consumed by four complete packets.
     [mutating]
-    public void advanceThreeRand4Packets()
+    public void advanceFourRand4Packets()
     {
-        sampleSeed = sampleSeed * 0x98a5741du + 0xacfbeaa7u;
+        sampleSeed = sampleSeed * 0x407af7f1u + 0x8f1f087cu;
     }
 }

@@ -14,9 +14,6 @@ importers:
       vue:
         specifier: ^3.2.47
         version: 3.5.41
-      vue-router:
-        specifier: ^4.1.6
-        version: 4.6.4(vue@3.5.41)
     devDependencies:
       '@vitejs/plugin-vue':
         specifier: ^6.0.8
@@ -553,9 +550,6 @@ packages:
 
   '@vue/compiler-ssr@3.5.41':
     resolution: {integrity: sha512-U3v5OejKEGqOI0Wy0+Sz7hGuIFZHA4LSXzrNM3IMIeDyJEBBfTpX26n3SDgToRpP2bLc9FfI2j/kSgcJ8Emq5A==}
-
-  '@vue/devtools-api@6.6.4':
-    resolution: {integrity: sha512-sGhTPMuXqZ1rVOk32RylztWkfXTRhuS7vgAKv0zjqk8gbsHkJ7xfFf+jbySxt7tWObEJwyKaHMikV/WGDiQm8g==}
 
   '@vue/reactivity@3.5.41':
     resolution: {integrity: sha512-rznsqKM0np0x18EjzF8x88MpEhdNsffbvFbckLL5+oUKz1BxAImEmO7J1ArRYSyo6aQaVoBDp7jEkT91OOxydA==}
@@ -3188,11 +3182,6 @@ packages:
     peerDependencies:
       eslint: '>=6.0.0'
 
-  vue-router@4.6.4:
-    resolution: {integrity: sha512-Hz9q5sa33Yhduglwz6g9skT8OBPii+4bFn88w6J+J4MfEo4KRRpmiNG/hHHkdbRFlLBOqxN8y8gf2Fb0MTUgVg==}
-    peerDependencies:
-      vue: ^3.5.0
-
   vue@3.5.41:
     resolution: {integrity: sha512-2laE0p+aK+/AOPG/XL/WepOs/GlK755LJ1XECi9kDUrz1FKNw8rb2Xzlw9JS1rqEV55nb0ttsKxVlTCcd+R5cg==}
     peerDependencies:
@@ -3712,8 +3701,6 @@ snapshots:
     dependencies:
       '@vue/compiler-dom': 3.5.41
       '@vue/shared': 3.5.41
-
-  '@vue/devtools-api@6.6.4': {}
 
   '@vue/reactivity@3.5.41':
     dependencies:
@@ -6618,11 +6605,6 @@ snapshots:
       semver: 7.6.2
     transitivePeerDependencies:
       - supports-color
-
-  vue-router@4.6.4(vue@3.5.41):
-    dependencies:
-      '@vue/devtools-api': 6.6.4
-      vue: 3.5.41
 
   vue@3.5.41:
     dependencies:

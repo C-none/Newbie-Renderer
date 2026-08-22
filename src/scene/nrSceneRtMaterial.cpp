@@ -71,6 +71,31 @@ namespace
     return std::max(authoredIor, 1.0f);
 }
 
+[[nodiscard]] float effectiveSpecularFactor(const nr::resource::Material &material) noexcept
+{
+    if (!material.specular.has_value() || !std::isfinite(material.specular->factor))
+    {
+        return 1.0f;
+    }
+
+    return std::clamp(material.specular->factor, 0.0f, 1.0f);
+}
+
+[[nodiscard]] DirectX::XMFLOAT3 effectiveSpecularColorFactor(const nr::resource::Material &material) noexcept
+{
+    if (!material.specular.has_value())
+    {
+        return DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f};
+    }
+
+    auto finiteNonNegative = [](float value) { return std::isfinite(value) ? std::max(value, 0.0f) : 1.0f; };
+    return DirectX::XMFLOAT3{
+        finiteNonNegative(material.specular->colorFactor.x),
+        finiteNonNegative(material.specular->colorFactor.y),
+        finiteNonNegative(material.specular->colorFactor.z),
+    };
+}
+
 [[nodiscard]] RtTransmissionMode transmissionMode(const nr::resource::Material &material) noexcept
 {
     return material.hasVolumeTransmissionBoundary() ? RtTransmissionMode::volume : RtTransmissionMode::thin;
@@ -153,8 +178,11 @@ namespace
 
     if (material.unlit &&
         (material.clearcoat.has_value() || material.sheen.has_value() || material.transmission.has_value() ||
-         material.ior.has_value() || material.volumeBoundary.has_value() || material.anisotropy.has_value() ||
+         material.ior.has_value() || material.specular.has_value() || material.volumeBoundary.has_value() ||
+         material.anisotropy.has_value() ||
          slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::anisotropy) ||
+         slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::specular) ||
+         slotHasTexture(material, nr::resource::MaterialTextureSlotSemantic::specularColor) ||
          anyNonZero(material.core.emissiveFactor)))
     {
         nr::nrLog<nr::LogLevel::warning>(
@@ -256,6 +284,7 @@ namespace
         material.sheen.has_value()
             ? std::max({material.sheen->colorFactor.x, material.sheen->colorFactor.y, material.sheen->colorFactor.z})
             : 0.0f;
+    auto const specularColorFactor = effectiveSpecularColorFactor(material);
 
     // Effective base normal scale is 0 when the base normal slot is unauthored, so always-sampling the
     // neutral texture id 0 collapses the decoded tangent normal back to the geometric/interpolated normal.
@@ -292,7 +321,7 @@ namespace
             },
         .transmissionClearcoatSheen =
             DirectX::XMFLOAT4{
-                0.0f,
+                transmissionIor(material),
                 clearcoatFactor,
                 clearcoatRoughness,
                 sheenMax,
@@ -303,6 +332,13 @@ namespace
                 physicalLayerFlags != RtMaterialLayerFlag::none ? anisotropyRotation(material) : 0.0f,
                 anisotropyTexturePresent ? 1.0f : 0.0f,
                 0.0f,
+            },
+        .specularColorAndFactor =
+            DirectX::XMFLOAT4{
+                specularColorFactor.x,
+                specularColorFactor.y,
+                specularColorFactor.z,
+                effectiveSpecularFactor(material),
             },
     };
 

@@ -160,11 +160,8 @@ struct CommandLineOptions
     auto training = TrainingCommandLineOptions{
         .artifactPath = std::move(artifactPath),
         .checkpointPath = std::move(checkpointPath),
+        .checkpointMustExist = checkpointMustExist,
     };
-    if (checkpointMustExist)
-    {
-        training.checkpointMustExist = true;
-    }
     return CommandLineOptions{.training = std::move(training)};
 }
 
@@ -330,7 +327,8 @@ struct CommandLineOptions
         .debugShaderInstrumentationEnabled = false,
     });
     app.resetCameraFromSceneOrDefault();
-    if (trainingOptions)
+    auto const interactive = !trainingOptions;
+    if (!interactive)
     {
         std::println("Training the complete neural appearance budget; artifact='{}', checkpoint='{}'.",
                      trainingOptions->artifactPath.string(), trainingOptions->checkpointPath.string());
@@ -343,8 +341,8 @@ struct CommandLineOptions
     auto &renderer = app.renderer();
     auto &presentation = renderer.device().presentationContext;
     auto neuralAppearanceNode =
-        std::make_shared<nr::renderPasses::NeuralAppearanceNode>(!trainingOptions.has_value(), trainingSeed);
-    auto graphSpec = buildViewerGraphSpec(neuralAppearanceNode, !trainingOptions.has_value());
+        std::make_shared<nr::renderPasses::NeuralAppearanceNode>(interactive, trainingSeed);
+    auto graphSpec = buildViewerGraphSpec(neuralAppearanceNode, interactive);
     auto const preflight = renderer.preflightGraph(graphSpec);
     nr::nrAssert(static_cast<bool>(preflight), "Neural material viewer graph preflight failed.");
     nr::nrAssert(renderer.installGraph(graphSpec), "Neural material viewer graph installation failed.");
@@ -387,7 +385,7 @@ struct CommandLineOptions
 
     while (!presentation.windowShouldClose())
     {
-        presentation.pollEvents();
+        presentation.windowInput().pollEvents();
 
         auto const now = std::chrono::steady_clock::now();
         auto const deltaSeconds = std::chrono::duration<float>(now - previousTick).count();
@@ -405,7 +403,7 @@ struct CommandLineOptions
             framebufferWasUnavailable = false;
         }
 
-        if (!trainingOptions)
+        if (interactive)
         {
             app.ui().beginFrame(presentation, deltaSeconds);
             app.ui().setCameraFrame(app.camera().frame());

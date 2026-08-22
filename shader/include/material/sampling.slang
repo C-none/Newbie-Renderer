@@ -104,7 +104,33 @@ public MaterialSample sampleCoreMaterialVariant(StructuredBuffer<RtMaterialTextu
     return MaterialSample(
         baseColor, saturate(material.emissiveAndMetallic.w * metallicRoughnessTexture.b),
         clamp(material.roughnessNormalOcclusionAlpha.x * metallicRoughnessTexture.g, kMaterialMinRoughness, 1.0f),
-        material.emissiveAndMetallic.rgb * emissiveTexture.rgb, saturate(baseColor.a));
+        material.emissiveAndMetallic.rgb * emissiveTexture.rgb, saturate(baseColor.a), float3(0.04f), 1.0f, 1.0f);
+}
+
+public void sampleMaterialSpecularAndOcclusionVariant(StructuredBuffer<RtMaterialTextureRef> textureRefs,
+                                                       RtMaterialHeader material, RtSurfaceData surface,
+                                                       float baseDielectricF0, float3 filterRandomValues,
+                                                       inout MaterialSample sample)
+{
+    float occlusionTexture =
+        sampleMaterialTextureVariant(textureRefs, material, MaterialTextureSlot.occlusion, surface.texCoord0,
+                                     surface.texCoord1, float4(1.0f), filterRandomValues.x)
+            .r;
+    float specularTexture =
+        sampleMaterialTextureVariant(textureRefs, material, MaterialTextureSlot.specular, surface.texCoord0,
+                                     surface.texCoord1, float4(1.0f), filterRandomValues.y)
+            .a;
+    float3 specularColorTexture =
+        sampleMaterialTextureVariant(textureRefs, material, MaterialTextureSlot.specularColor, surface.texCoord0,
+                                     surface.texCoord1, float4(1.0f), filterRandomValues.z)
+            .rgb;
+
+    float specular = saturate(material.specularColorAndFactor.a * specularTexture);
+    float3 specularColor = max(material.specularColorAndFactor.rgb * specularColorTexture, float3(0.0f));
+    sample.dielectricF0 = min(float3(baseDielectricF0) * specularColor, float3(1.0f)) * specular;
+    sample.dielectricF90 = specular;
+    sample.occlusion =
+        saturate(1.0f + saturate(material.roughnessNormalOcclusionAlpha.z) * (occlusionTexture - 1.0f));
 }
 
 // Canonical layer-record parser. Records are compact in bit order (base -> clearcoat -> sheen ->
@@ -117,6 +143,7 @@ public MaterialLayerStack sampleMaterialLayersVariant<let LayerFlags : RtMateria
     inout RandomSequence filterSequence)
 {
     MaterialLayerStack sample = MaterialLayerStack(orientedNormal);
+    sample.transmissionIor = material.transmissionClearcoatSheen.x;
 
     uint layerRecordIndex = material.layerOffset + 1u;
 

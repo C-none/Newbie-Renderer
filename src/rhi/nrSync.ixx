@@ -28,14 +28,6 @@ export namespace nr::rhi::sync
 }
 
 /**
- * @brief Query current timeline semaphore counter value.
- */
-[[nodiscard]] inline std::uint64_t timelineValue(const vk::raii::Semaphore &timelineSemaphore)
-{
-    return timelineSemaphore.getCounterValue();
-}
-
-/**
  * @brief Wait until timeline semaphore reaches at least @p value.
  */
 [[nodiscard]] inline bool waitTimeline(const vk::raii::Device &device, const vk::raii::Semaphore &timelineSemaphore,

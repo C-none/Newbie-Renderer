@@ -9,6 +9,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite --host",
+    "generate:posters": "node tools/generate-gallery-posters.mjs",
     "lint": "pnpm run lint:js && pnpm run lint:style",
     "lint:fix": "eslint --ext .js,.vue --ignore-path .gitignore src --fix && stylelint **/*.{vue,css} --ignore-path .gitignore --fix",
     "lint:js": "eslint --ext .js,.vue --ignore-path .gitignore src",
@@ -17,8 +18,7 @@
   },
   "dependencies": {
     "three": "^0.185.1",
-    "vue": "^3.2.47",
-    "vue-router": "^4.1.6"
+    "vue": "^3.2.47"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.8",

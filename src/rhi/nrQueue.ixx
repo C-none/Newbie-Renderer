@@ -1,7 +1,9 @@
 export module nr.rhi:queue;
 import dependency.vulkan;
+import nr.utils;
 import std;
 import :commandBatch;
+import :type;
 
 export namespace nr::rhi
 {
@@ -25,9 +27,6 @@ export namespace nr::rhi
 class GpuQueue
 {
   public:
-    /// Default constructor for deferred initialization
-    GpuQueue() = default;
-
     /**
      * @brief Construct queue wrapper from device and queue family
      * @param device Vulkan device
@@ -94,14 +93,19 @@ class GpuQueue
      */
     [[nodiscard]] const vk::raii::Queue &handle() const noexcept;
 
-    /**
-     * @brief Check if queue is valid (initialized)
-     */
-    [[nodiscard]] bool valid() const noexcept;
-
   private:
-    vk::raii::Queue queue_ = {nullptr};
-    std::uint32_t queueFamilyIndex_ = 0;
+    vk::raii::Queue queue_;
+    std::uint32_t queueFamilyIndex_;
+};
+
+/**
+ * @brief Queue family indices for the three runtime queue roles.
+ */
+struct QueueFamilyIndices
+{
+    std::uint32_t graphics = 0;
+    std::uint32_t compute = 0;
+    std::uint32_t transfer = 0;
 };
 
 /**
@@ -119,9 +123,6 @@ class GpuQueue
 class QueueManager
 {
   public:
-    /// Default constructor for deferred initialization
-    QueueManager() = default;
-
     /**
      * @brief Construct queue manager with pre-created queues
      * @param graphics Graphics queue
@@ -144,6 +145,17 @@ class QueueManager
 
     [[nodiscard]] GpuQueue &transfer();
     [[nodiscard]] const GpuQueue &transfer() const;
+
+    /**
+     * @brief Fetch the queue family indices of all three roles in one call.
+     */
+    [[nodiscard]] QueueFamilyIndices familyIndices() const noexcept;
+
+    /**
+     * @brief Resolve a QueueRole to its queue.
+     */
+    [[nodiscard]] GpuQueue &forRole(QueueRole role);
+    [[nodiscard]] const GpuQueue &forRole(QueueRole role) const;
 
     /**
      * @brief Wait for all queues to become idle

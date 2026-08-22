@@ -409,23 +409,14 @@ struct UiTextureUploadPayload
 
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUiTextureUploadPlan(const nr::rhi::Device &device)
 {
-    auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device.queueManager.graphics().queueFamilyIndex();
-    nr::nrAssert(transferQueueFamily != graphicsQueueFamily,
+    auto const queueFamilies = device.queueManager.familyIndices();
+    nr::nrAssert(queueFamilies.transfer != queueFamilies.graphics,
                  "UiNode texture upload requires distinct transfer and graphics queue families.");
-
-    auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
-    plan.releaseToDestination =
-        nr::rhi::ops::makeQueueOwnershipTransfer(transferQueueFamily, graphicsQueueFamily,
-                                                 nr::rhi::ops::QueueAccessScope{
-                                                     .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                     .access = vk::AccessFlagBits2::eTransferWrite,
-                                                 },
-                                                 nr::rhi::ops::QueueAccessScope{
-                                                     .stages = vk::PipelineStageFlagBits2::eFragmentShader,
-                                                     .access = vk::AccessFlagBits2::eShaderRead,
-                                                 });
-    return plan;
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.graphics,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eFragmentShader,
+                                                             .access = vk::AccessFlagBits2::eShaderRead,
+                                                         });
 }
 
 void submitAndWaitUiTextureUploadSync(nr::rhi::Device &device, nr::rhi::ops::UploadReadbackContext &uploadContext,
@@ -433,30 +424,15 @@ void submitAndWaitUiTextureUploadSync(nr::rhi::Device &device, nr::rhi::ops::Upl
 {
     nr::nrAssert(uploadTicket.valid(), "UiNode texture upload synchronization requires a valid upload ticket.");
 
-    auto syncPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.graphics().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto syncCommandBuffers = syncPool.allocatePrimary(1);
-    auto &syncCommandBuffer = syncCommandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(syncCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    uploadContext.recordImageAcquireBarrier(syncCommandBuffer, uploadTicket);
-    nr::rhi::CommandRecorder::end(syncCommandBuffer);
-
-    auto syncSubmission = nr::rhi::CommandBatch{};
-    syncSubmission.addWait(uploadContext.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
-                           uploadTicket.signalValue);
-    syncSubmission.addCommandBuffer(syncCommandBuffer);
-
-    auto syncFence = vk::raii::Fence{device.device, vk::FenceCreateInfo{}};
-    device.queueManager.graphics().submit(std::move(syncSubmission), std::cref(syncFence));
-
-    auto const waitResult =
-        device.device.waitForFences(*syncFence, vk::True, std::numeric_limits<std::uint64_t>::max());
-    nr::nrAssert(waitResult == vk::Result::eSuccess,
-                 "UiNode failed waiting for texture upload graphics synchronization.");
+    nr::rhi::submitOneShot(device.device, device.queueManager.graphics(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *uploadContext.uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eAllCommands,
+                               .waitValue = uploadTicket.signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               uploadContext.recordImageAcquireBarrier(commandBuffer, uploadTicket);
+                           });
     uploadContext.reclaimCompletedUploads();
 }
 

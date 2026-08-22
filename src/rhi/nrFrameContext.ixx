@@ -53,15 +53,15 @@ export namespace nr::rhi
  *
  *   // Worker thread: reset and record the assigned secondary only.
  *   secondary.reset();
- *   CommandRecorder::beginSecondary(secondary, inheritanceInfo);
+ *   secondary.begin(vk::CommandBufferBeginInfo{{}, &inheritanceInfo});
  *   recordPass(secondary, ...);
- *   CommandRecorder::end(secondary);
+ *   secondary.end();
  *
  *   // Main thread: build primary and execute secondaries.
- *   auto primary = frame.graphicsPrimary().allocatePrimary();
- *   CommandRecorder::beginPrimary(primary);
+ *   auto primary = frame.graphicsPrimary().allocate<vk::CommandBufferLevel::ePrimary>();
+ *   primary.begin(vk::CommandBufferBeginInfo{});
  *   primary.executeCommands(...);
- *   CommandRecorder::end(primary);
+ *   primary.end();
  *
  * ============================================================================
  */
@@ -81,9 +81,6 @@ class FrameContext
         std::uint32_t queueFamilyIndex;
     };
 
-    /// Default constructor for deferred initialization
-    FrameContext() = default;
-
     /**
      * @brief Construct frame context with queue-specific pools
      * @param device Vulkan device
@@ -97,9 +94,9 @@ class FrameContext
     // Move-only semantics
     FrameContext(const FrameContext &) = delete;
     FrameContext &operator=(const FrameContext &) = delete;
-    FrameContext(FrameContext &&other) noexcept;
+    FrameContext(FrameContext &&other) noexcept = default;
 
-    FrameContext &operator=(FrameContext &&other) noexcept;
+    FrameContext &operator=(FrameContext &&other) noexcept = default;
 
     /**
      * @brief Wait for this frame's fence to be signaled
@@ -168,16 +165,26 @@ class FrameContext
     [[nodiscard]] const vk::raii::Fence &fence() const noexcept;
 
     /**
-     * @brief Get number of registered secondary pools
+     * @brief Get number of secondary command pool slots prepared for this frame
      */
-    template <QueueRole T> [[nodiscard]] std::size_t registeredThreads() const noexcept
+    template <QueueRole T> [[nodiscard]] std::uint32_t preparedSecondaryWorkers() const noexcept
     {
-        return preparedSecondaryWorkers<T>();
+        static_assert(isSupportedQueueRole<T>(), "Unsupported QueueRole template argument");
+        if constexpr (T == QueueRole::Graphics)
+        {
+            return graphicsPreparedSecondaryWorkers_;
+        }
+        else if constexpr (T == QueueRole::Compute)
+        {
+            return computePreparedSecondaryWorkers_;
+        }
+        else
+        {
+            return transferPreparedSecondaryWorkers_;
+        }
     }
 
   private:
-    void moveFrom(FrameContext &&other) noexcept;
-
     /**
      * @brief Ensure queue-specific secondary pool slots are materialized for [0, workerCount).
      */
@@ -206,22 +213,6 @@ class FrameContext
         else
         {
             return transferPrimary_;
-        }
-    }
-
-    template <QueueRole T> [[nodiscard]] std::uint32_t preparedSecondaryWorkers() const noexcept
-    {
-        if constexpr (T == QueueRole::Graphics)
-        {
-            return graphicsPreparedSecondaryWorkers_;
-        }
-        else if constexpr (T == QueueRole::Compute)
-        {
-            return computePreparedSecondaryWorkers_;
-        }
-        else
-        {
-            return transferPreparedSecondaryWorkers_;
         }
     }
 
@@ -278,13 +269,13 @@ class FrameContext
 
   private:
     // Device reference and queue family IDs (used for frame-begin secondary-pool prebuild)
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
-    std::uint32_t graphicsQueueFamily_ = 0;
-    std::uint32_t computeQueueFamily_ = 0;
-    std::uint32_t transferQueueFamily_ = 0;
+    std::reference_wrapper<const vk::raii::Device> device_;
+    std::uint32_t graphicsQueueFamily_;
+    std::uint32_t computeQueueFamily_;
+    std::uint32_t transferQueueFamily_;
 
     // Synchronization primitives
-    vk::raii::Fence fence_ = {nullptr};
+    vk::raii::Fence fence_;
     // Graphics queue pools
     CommandPool graphicsPrimary_;
     std::array<std::optional<CommandPool>, kMaxSecondaryWorkers> graphicsSecondary_{};
@@ -315,13 +306,9 @@ class FrameContext
 class FrameManager
 {
   public:
-    /// Default constructor
-    FrameManager() = default;
-
     /**
-     * @brief Construct frame manager with N frames in flight
+     * @brief Construct frame manager with maxFrameInFlight frames
      * @param device Vulkan device
-     * @param frameCount Number of frames in flight
      * @param graphicsConfig Graphics pool configuration
      * @param computeConfig Compute pool configuration
      * @param transferConfig Dedicated transfer pool configuration
@@ -347,11 +334,6 @@ class FrameManager
     [[nodiscard]] FrameContext &current() noexcept;
 
     /**
-     * @brief Get total number of frame contexts
-     */
-    [[nodiscard]] std::size_t frameCount() const noexcept;
-
-    /**
      * @brief Get current frame index
      */
     [[nodiscard]] std::size_t currentIndex() const noexcept;
@@ -362,7 +344,7 @@ class FrameManager
     void waitAll();
 
   private:
-    std::vector<FrameContext> frames_;
+    std::array<FrameContext, nr::maxFrameInFlight> frames_;
     std::size_t currentIndex_ = 0;
 };
 

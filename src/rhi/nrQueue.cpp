@@ -1,8 +1,10 @@
 module nr.rhi;
 import :queue;
 import dependency.vulkan;
+import nr.utils;
 import std;
 import :commandBatch;
+import :type;
 
 namespace nr::rhi
 {
@@ -48,11 +50,6 @@ void GpuQueue::waitIdle()
     return queue_;
 }
 
-[[nodiscard]] bool GpuQueue::valid() const noexcept
-{
-    return *queue_ != nullptr;
-}
-
 QueueManager::QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfer)
     : graphics_(std::move(graphics)), compute_(std::move(compute)), transfer_(std::move(transfer))
 {
@@ -88,13 +85,38 @@ QueueManager::QueueManager(GpuQueue graphics, GpuQueue compute, GpuQueue transfe
     return transfer_;
 }
 
+[[nodiscard]] QueueFamilyIndices QueueManager::familyIndices() const noexcept
+{
+    return QueueFamilyIndices{
+        .graphics = graphics_.queueFamilyIndex(),
+        .compute = compute_.queueFamilyIndex(),
+        .transfer = transfer_.queueFamilyIndex(),
+    };
+}
+
+[[nodiscard]] GpuQueue &QueueManager::forRole(QueueRole role)
+{
+    return const_cast<GpuQueue &>(std::as_const(*this).forRole(role));
+}
+
+[[nodiscard]] const GpuQueue &QueueManager::forRole(QueueRole role) const
+{
+    switch (role)
+    {
+    case QueueRole::Graphics:
+        return graphics_;
+    case QueueRole::Compute:
+        return compute_;
+    case QueueRole::Transfer:
+        return transfer_;
+    }
+    nrAssert(false, "QueueManager::forRole received an unknown QueueRole.");
+}
+
 void QueueManager::waitAllIdle()
 {
-    if (graphics_.valid())
-        graphics_.waitIdle();
-    if (compute_.valid())
-        compute_.waitIdle();
-    if (transfer_.valid())
-        transfer_.waitIdle();
+    graphics_.waitIdle();
+    compute_.waitIdle();
+    transfer_.waitIdle();
 }
 } // namespace nr::rhi

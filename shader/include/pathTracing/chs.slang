@@ -91,11 +91,16 @@ public struct MaterialCHS<let LayerFlags : RtMaterialLayerFlag> : ICHS
 
         ResolvedMaterialPayload material = resolveLitMaterialPayloadVariant<LayerFlags>(
             rtMaterialTextureRefs, rtMaterialLayers, input.material, input.surface, input.viewDirection,
-            input.materialIndex, input.materialFilterSequence);
+            input.materialIndex, input.materialFilterSequence, input.frontFace, input.incidentMediumIor,
+            input.exteriorMediumIor);
         ClosestHitResult result = ClosestHitResult(material, input);
         // Scatter sampling consumes the completed hit frame and medium state.
         result.scatter =
             sampleResolvedMaterialScatterVariant<LayerFlags>(result.material, input.viewDirection, input.scatterRandomValues);
+        result.scatter.diffuseWeight *= result.material.occlusion;
+        result.scatter.specularWeight *= result.material.occlusion;
+        result.scatter.weight = result.scatter.diffuseWeight + result.scatter.specularWeight;
+        result.scatter.valid = result.scatter.valid && any(result.scatter.weight > float3(0.0f));
         return result;
     }
 }

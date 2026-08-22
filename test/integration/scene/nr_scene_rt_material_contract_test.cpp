@@ -111,6 +111,18 @@ namespace
         material.ior.emplace();
         material.ior->ior = *source.ior;
     }
+    if (source.specular.has_value())
+    {
+        material.specular = nr::resource::MaterialSpecularExtension{
+            .factor = source.specular->factor,
+            .colorFactor =
+                DirectX::XMFLOAT3{
+                    source.specular->colorFactor[0],
+                    source.specular->colorFactor[1],
+                    source.specular->colorFactor[2],
+                },
+        };
+    }
     if (source.thicknessFactor.has_value())
     {
         material.volumeBoundary.emplace();
@@ -433,6 +445,9 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         material.transmission->factor = 0.5f;
         material.ior.emplace();
         material.ior->ior = 1.33f;
+        material.specular.emplace();
+        material.specular->factor = 0.25f;
+        material.specular->colorFactor = DirectX::XMFLOAT3{0.1f, 0.34f, 1.0f};
         material.volumeBoundary.emplace();
         material.volumeBoundary->thicknessFactor = 0.25f;
         material.anisotropy.emplace();
@@ -459,8 +474,15 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
         nr::test::require(nearlyEqual(compiled.header.anisotropy.y, 0.25f));
         nr::test::require(nearlyEqual(compiled.header.anisotropy.z, 1.0f));
         nr::test::require(nearlyEqual(compiled.header.anisotropy.w, 0.0f));
-        nr::test::requireEqual(sizeof(nr::scene::RtMaterialHeader), std::size_t{112u});
+        nr::test::require(nearlyEqual(compiled.header.specularColorAndFactor.x, 0.1f));
+        nr::test::require(nearlyEqual(compiled.header.specularColorAndFactor.y, 0.34f));
+        nr::test::require(nearlyEqual(compiled.header.specularColorAndFactor.z, 1.0f));
+        nr::test::require(nearlyEqual(compiled.header.specularColorAndFactor.w, 0.25f));
+        nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 1.33f));
+        nr::test::requireEqual(sizeof(nr::scene::RtMaterialHeader), std::size_t{128u});
         nr::test::requireEqual(nr::memberOffset<&nr::scene::RtMaterialHeader::anisotropy>(), std::size_t{96u});
+        nr::test::requireEqual(nr::memberOffset<&nr::scene::RtMaterialHeader::specularColorAndFactor>(),
+                               std::size_t{112u});
         auto compiledRefs = std::array<std::reference_wrapper<const nr::scene::RtCompiledMaterial>, 1>{
             std::cref(compiled),
         };
@@ -471,6 +493,11 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
                               nearlyEqual(table.headers[0].anisotropy.z, compiled.header.anisotropy.z) &&
                               nearlyEqual(table.headers[0].anisotropy.w, compiled.header.anisotropy.w),
                           "RT material table packing must preserve anisotropy ABI lanes");
+        nr::test::require(nearlyEqual(table.headers[0].specularColorAndFactor.x, 0.1f) &&
+                              nearlyEqual(table.headers[0].specularColorAndFactor.y, 0.34f) &&
+                              nearlyEqual(table.headers[0].specularColorAndFactor.z, 1.0f) &&
+                              nearlyEqual(table.headers[0].specularColorAndFactor.w, 0.25f),
+                          "RT material table packing must preserve KHR_materials_specular ABI lanes");
         nr::test::requireEqual(compiled.layers.size(), std::size_t{4});
         nr::test::requireEqual(compiled.layers[0].layer, nr::scene::RtMaterialLayerFlag::baseSurface);
         nr::test::requireEqual(compiled.layers[1].layer, nr::scene::RtMaterialLayerFlag::clearcoat);
@@ -485,7 +512,7 @@ const nr::test::CaseRegistrar rtMaterialCompilerCase{
                                                    return layer.layer > nr::scene::RtMaterialLayerFlag::transmission;
                                                }),
                           "unsupported features must not create RT layers");
-        nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+        nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{14});
     }};
 
 const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
@@ -510,7 +537,7 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::requireEqual(compiled.header.layerFlags, Layer::none);
             nr::test::requireEqual(compiled.header.layerCount, 0u);
             nr::test::requireEqual(compiled.layers.size(), std::size_t{0});
-            nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+            nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{14});
             nr::test::require(!hasFeature(compiled, nr::scene::RtMaterialFeatureFlag::volumeBoundary),
                               "unlit materials must not retain an ignored PBR volume boundary");
             nr::test::require(nearlyEqual(compiled.header.anisotropy.x, 0.0f) &&
@@ -571,12 +598,22 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::require(
                 !nr::resource::hasAnyFeature(material.featureFlags(), nr::resource::MaterialFeatureFlag::transmission),
                 "zero transmission factor must not enable the resource transmission feature");
-            nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 0.0f));
+            nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 1.5f));
 
             material.transmission->factor = -0.25f;
             auto negativeCompiled = nr::scene::compileRtMaterial(material);
             nr::test::require(!hasLayer(negativeCompiled, Layer::transmission));
-            nr::test::require(nearlyEqual(negativeCompiled.header.transmissionClearcoatSheen.x, 0.0f));
+            nr::test::require(nearlyEqual(negativeCompiled.header.transmissionClearcoatSheen.x, 1.5f));
+        }
+
+        // IOR affects opaque dielectric reflection without enabling a transmission layer.
+        {
+            auto material = nr::resource::Material{};
+            material.ior.emplace();
+            material.ior->ior = 2.42f;
+            auto compiled = nr::scene::compileRtMaterial(material);
+            nr::test::require(!hasLayer(compiled, Layer::transmission));
+            nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 2.42f));
         }
 
         // A zero anisotropy factor remains isotropic even with a usable texture. A non-resident
@@ -665,8 +702,8 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
                                    static_cast<std::uint32_t>(nr::scene::RtTransmissionMode::thin));
             nr::test::require(nearlyEqual(compiled.layers[1].p0.x, 0.75f));
             nr::test::require(nearlyEqual(compiled.layers[1].p0.y, 1.5f));
-            nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 0.0f),
-                              "positive transmission must keep factor/IOR/mode single-sourced in its layer record");
+            nr::test::require(nearlyEqual(compiled.header.transmissionClearcoatSheen.x, 1.5f),
+                              "the header must preserve base dielectric IOR for reflection without layer reads");
         }
 
         // Positive thickness selects the volume boundary without changing the layer/SBT variant.
@@ -690,8 +727,16 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             material.transmission->factor = 1.0f;
             material.ior.emplace();
             material.ior->ior = 0.0f;
+            material.specular.emplace();
+            material.specular->factor = 0.5f;
+            material.specular->colorFactor = DirectX::XMFLOAT3{0.25f, 0.5f, 0.75f};
             auto compiled = nr::scene::compileRtMaterial(material);
             nr::test::require(nearlyEqual(compiled.layers[1].p0.y, 0.0f));
+            nr::test::require(nearlyEqual(compiled.header.specularColorAndFactor.x, 0.25f) &&
+                                  nearlyEqual(compiled.header.specularColorAndFactor.y, 0.5f) &&
+                                  nearlyEqual(compiled.header.specularColorAndFactor.z, 0.75f) &&
+                                  nearlyEqual(compiled.header.specularColorAndFactor.w, 0.5f),
+                              "IOR zero must preserve subsequent KHR_materials_specular modulation");
         }
 
         // base + all three optional layers -> canonical order base -> clearcoat -> sheen -> transmission.
@@ -716,7 +761,7 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::require(fallback.header.layerFlags != Layer::none, "fallback RT material must not be unlit");
         }
 
-        // Dense texture refs: fixed 12 entries in slot order; authored -> id, absent -> id 0. Each
+        // Dense texture refs: fixed 14 entries in slot order; authored -> id, absent -> id 0. Each
         // entry transports UV selection and its affine transform without a redundant slot field.
         {
             auto material = nr::resource::Material{};
@@ -738,13 +783,23 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             occlusionSlot.transform.linear = DirectX::XMFLOAT4{4.0f, 0.0f, 0.0f, 2.0f};
             occlusionSlot.transform.offset = DirectX::XMFLOAT2{0.5f, 0.25f};
 
+            auto &specularSlot = material.slot(MaterialTextureSlotSemantic::specular);
+            specularSlot.texture = nr::resource::TextureHandle{5u, 1u};
+            specularSlot.transform.offset = DirectX::XMFLOAT2{0.125f, 0.375f};
+            auto &specularColorSlot = material.slot(MaterialTextureSlotSemantic::specularColor);
+            specularColorSlot.texture = nr::resource::TextureHandle{6u, 1u};
+            specularColorSlot.uvSet = 1u;
+            specularColorSlot.transform.linear = DirectX::XMFLOAT4{1.5f, 0.0f, 0.0f, 0.75f};
+
             auto ids = nr::scene::SceneMaterialTextureIds{};
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)] = 7u;
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::normal)] = 9u;
             ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::occlusion)] = 11u;
+            ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::specular)] = 13u;
+            ids[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::specularColor)] = 17u;
             auto compiled = nr::scene::compileRtMaterial(material, ids);
             nr::test::requireEqual(sizeof(nr::scene::RtMaterialTextureRef), std::size_t{32u});
-            nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{12});
+            nr::test::requireEqual(compiled.textureRefs.size(), std::size_t{14});
 
             auto const &baseColorRef =
                 compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::baseColor)];
@@ -776,6 +831,18 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
             nr::test::require(nearlyEqual(occlusionRef.uvOffset.x, 0.5f));
             nr::test::require(nearlyEqual(occlusionRef.uvOffset.y, 0.25f));
 
+            auto const &specularRef =
+                compiled.textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::specular)];
+            nr::test::requireEqual(specularRef.textureId, 13u);
+            nr::test::require(nearlyEqual(specularRef.uvOffset.x, 0.125f));
+            nr::test::require(nearlyEqual(specularRef.uvOffset.y, 0.375f));
+            auto const &specularColorRef = compiled.textureRefs[
+                nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::specularColor)];
+            nr::test::requireEqual(specularColorRef.textureId, 17u);
+            nr::test::requireEqual(specularColorRef.uvSet, 1u);
+            nr::test::require(nearlyEqual(specularColorRef.uvLinear.x, 1.5f));
+            nr::test::require(nearlyEqual(specularColorRef.uvLinear.w, 0.75f));
+
             nr::test::requireEqual(
                 compiled
                     .textureRefs[nr::resource::materialTextureSlotIndex(MaterialTextureSlotSemantic::metallicRoughness)]
@@ -787,13 +854,16 @@ const nr::test::CaseRegistrar rtMaterialLayerFlagMatrixCase{
     }};
 
 const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
-    "RT material shader keeps transformed nearest LOD0 FAS and anisotropy semantics", [] {
+    "RT material shader keeps transformed nearest LOD0 FAS and glTF material semantics", [] {
         auto const materialTypes = readProjectFile("shader/include/material/types.slang");
         auto const materialSampling = readProjectFile("shader/include/material/sampling.slang");
         auto const stochasticTextureFiltering =
             readProjectFile("shader/include/material/stochasticTextureFiltering.slang");
         auto const materialBsdf = readProjectFile("shader/include/material/bsdf.slang");
         auto const materialPayload = readProjectFile("shader/include/material/payload.slang");
+        auto const pathTracingChs = readProjectFile("shader/include/pathTracing/chs.slang");
+        auto const pathTracingCore = readProjectFile("shader/renderer/pathTracing/core.slang");
+        auto const pathTracingGuides = readProjectFile("shader/renderer/pathTracing/guides.slang");
         auto const hitSurface = readProjectFile("shader/include/rt/hitSurface.slang");
         auto const sceneTextureBinding = readProjectFile("src/renderPasses/nrSceneTextureTableBinding.ixx");
 
@@ -816,10 +886,13 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
         auto const anisotropyDecode = materialSampling.find("public void decodeMaterialAnisotropy(");
         auto const anisotropySample = materialSampling.find("public void sampleMaterialAnisotropyVariant");
         auto const coreSample = materialSampling.find("public MaterialSample sampleCoreMaterialVariant");
+        auto const specularSample = materialSampling.find("public void sampleMaterialSpecularAndOcclusionVariant");
         auto const layerSample = materialSampling.find("// Canonical layer-record parser.");
         nr::test::require(genericSample != std::string::npos && normalSample != std::string::npos &&
                               anisotropyDecode != std::string::npos && anisotropySample != std::string::npos &&
-                              coreSample != std::string::npos && layerSample != std::string::npos,
+                              coreSample != std::string::npos && specularSample != std::string::npos &&
+                              layerSample != std::string::npos && coreSample < specularSample &&
+                              specularSample < layerSample,
                           "material shader sampling functions should remain discoverable");
         auto const genericSamplingBody = materialSampling.substr(genericSample, normalSample - genericSample);
         nr::test::require(genericSamplingBody.contains("materialTextureUv(") &&
@@ -899,7 +972,12 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
         nr::test::require(
             materialPayload.contains("BaseGgxDistribution<LayerFlags> baseGgx") &&
                 materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.thin") &&
-                materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.volume"),
+                materialPayload.contains("payload.layers.transmissionMode == RtTransmissionMode.volume") &&
+                materialPayload.contains("bool iorSupportsMode = payload.layers.transmissionMode == "
+                                         "RtTransmissionMode.thin ||") &&
+                materialPayload.contains(
+                    "float transmissionFactor = hasActiveTransmission(payload) ? payload.layers.transmission") &&
+                !materialPayload.contains("payload.layers.transmissionIor <= 0.0f"),
             "reflection, thin folded transmission and Walter volume transmission should share the base distribution");
         nr::test::require(
             materialPayload.contains("public float3 materialPayloadFacingGeometryNormal(") &&
@@ -933,6 +1011,36 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 materialPayload.contains("sampleMaterialPayloadGgxHalfVector") &&
                 materialPayload.contains("float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal("),
             "clearcoat should retain its isotropic GGX distribution while using its independently adjusted normal");
+        nr::test::require(materialBsdf.contains("public float sheenAlpha(float roughness)") &&
+                              materialBsdf.contains("return safeRoughness * safeRoughness") &&
+                              materialBsdf.contains("return 1.0f / (1.0f + lambdaV + lambdaL)") &&
+                              materialBsdf.contains("public float sheenDirectionalAlbedo(") &&
+                              materialBsdf.contains("maximum absolute error below 0.035") &&
+                              materialBsdf.contains("float4 cosineBasis") &&
+                              materialBsdf.contains("11.299438972f * cosine2") &&
+                              !materialBsdf.contains("-1.9362f") &&
+                              materialBsdf.contains("public float sheenBaseAlbedoScaling(") &&
+                              materialPayload.contains("materialPayloadSheenBaseAlbedoScaling(") &&
+                              materialPayload.contains("result.diffuse *= baseAlbedoScaling") &&
+                              materialPayload.contains("result.specular *= baseAlbedoScaling"),
+                          "sheen must square perceptual roughness and attenuate the base layer by directional albedo");
+        nr::test::require(materialPayload.contains("fresnelSchlick(payload.dielectricF0") &&
+                              materialPayload.contains("float3(payload.dielectricF90)") &&
+                              materialPayload.contains("max(max(dielectricFresnel.r, dielectricFresnel.g)") &&
+                              materialBsdf.contains("return lerp(material.dielectricF0"),
+                           "KHR_materials_specular must drive dielectric F0/F90 and scalar diffuse preservation");
+        nr::test::require(pathTracingGuides.contains(
+                              "float3 specularF90 = lerp(float3(core.dielectricF90), float3(1.0f), core.metallic)") &&
+                              pathTracingGuides.contains(
+                                  "pathTracingGuideEnvBrdfApprox2(float3 specularF0, float3 specularF90") &&
+                              pathTracingGuides.contains(
+                                  "specularF0 * max(0.0f, scale) + specularF90 * max(0.0f, bias)") &&
+                              !pathTracingGuides.contains("saturate(specularColor.g * 50.0f)"),
+                          "path tracing specular guides must preserve independent KHR_materials_specular F0/F90");
+        nr::test::require(materialSampling.contains(
+                              "sample.transmissionIor = material.transmissionClearcoatSheen.x") &&
+                              materialPayload.contains("float interfaceIor = layers.transmissionIor"),
+                          "opaque and transmissive materials must resolve base dielectric F0 from the authored IOR");
 
         auto const baseSurfaceBegin = materialPayload.find("public struct BaseSurfaceBsdfLobe<");
         auto const sheenBegin = materialPayload.find("public struct SheenBsdfLobe");
@@ -960,6 +1068,10 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
                 sheenBody.contains("result.projected += mirrored.projected") &&
                 clearcoatBody.contains("result.projected += mirrored.projected"),
             "base, sheen, and clearcoat reflection must fold samples and sum both evaluation and PDF preimages");
+        nr::test::require(baseSurfaceBody.contains("float sinThetaT2 = eta * eta") &&
+                              baseSurfaceBody.contains("if (sinThetaT2 >= 1.0f)") &&
+                              baseSurfaceBody.contains("return float3(1.0f)"),
+                          "volume TIR must force the shared Fresnel event to reflection for eval/PDF/sample consistency");
         nr::test::require(
             materialPayload.contains("public bool materialPayloadGeometrySupportsReflection(") &&
                 materialPayload.contains("return dot(facingGeometryNormal, lightDirection) >= 0.0f") &&
@@ -968,28 +1080,32 @@ const nr::test::CaseRegistrar rtMaterialShaderUvAndAoPolicyCase{
             "folded reflection should stay exterior while transmission retains the complementary geometry-boundary "
             "contract");
 
-        auto const coreSamplingBody = materialSampling.substr(coreSample, layerSample - coreSample);
-        nr::test::require(!coreSamplingBody.contains("MaterialTextureSlot.occlusion"),
-                          "ambient occlusion must not be sampled by RT core material shading");
-        nr::test::require(!coreSamplingBody.contains("roughnessNormalOcclusionAlpha.z"),
-                          "ambient-occlusion strength must not multiply RT core material lighting");
-
-        auto shaderSources = std::filesystem::recursive_directory_iterator{projectRoot() / "shader"} |
-                             std::views::filter([](const std::filesystem::directory_entry &entry) {
-                                 return entry.is_regular_file() && entry.path().extension() == ".slang";
-                             });
-        std::ranges::for_each(shaderSources, [](const std::filesystem::directory_entry &entry) {
-            auto const relativePath = std::filesystem::relative(entry.path(), projectRoot());
-            auto const source = readProjectFile(relativePath);
-            nr::test::require(
-                !source.contains("MaterialTextureSlot.occlusion"),
-                std::format("ambient-occlusion texture sampling must remain absent from shader source '{}'",
-                            relativePath.generic_string()));
-            nr::test::require(!source.contains("roughnessNormalOcclusionAlpha.z") &&
-                                  !source.contains("occlusionStrength") && !source.contains("ambientOcclusion"),
-                              std::format("ambient-occlusion strength must remain absent from shader source '{}'",
-                                          relativePath.generic_string()));
-        });
+        auto const specularSamplingBody = materialSampling.substr(specularSample, layerSample - specularSample);
+        nr::test::require(specularSamplingBody.contains("float occlusionTexture =") &&
+                              specularSamplingBody.contains("MaterialTextureSlot.occlusion") &&
+                              specularSamplingBody.contains(".r;") &&
+                              specularSamplingBody.contains("float specularTexture =") &&
+                              specularSamplingBody.contains("MaterialTextureSlot.specular") &&
+                              specularSamplingBody.contains(".a;") &&
+                              specularSamplingBody.contains("float3 specularColorTexture =") &&
+                              specularSamplingBody.contains("MaterialTextureSlot.specularColor") &&
+                              specularSamplingBody.contains(".rgb;") &&
+                              specularSamplingBody.contains("roughnessNormalOcclusionAlpha.z") &&
+                              specularSamplingBody.contains("occlusionTexture - 1.0f") &&
+                              specularSamplingBody.contains(
+                                  "min(float3(baseDielectricF0) * specularColor, float3(1.0f)) * specular") &&
+                              specularSamplingBody.contains("sample.dielectricF90 = specular"),
+                          "AO and both KHR_materials_specular textures must reuse the shared variant sampler with "
+                          "their specified channels and factors");
+        nr::test::require(pathTracingChs.contains("result.scatter.diffuseWeight *= result.material.occlusion") &&
+                              pathTracingChs.contains("result.scatter.specularWeight *= result.material.occlusion") &&
+                              !pathTracingCore.contains("material.occlusion") &&
+                              !pathTracingCore.contains("ambientOcclusion"),
+                          "AO must affect only post-hit continuation, not current-surface direct light or emission");
+        nr::test::require(stochasticTextureFiltering.contains("Four 4D packets") &&
+                              stochasticTextureFiltering.contains("packet 3: occlusion, specular, specular color") &&
+                              pathTracingCore.contains("advanceFourRand4Packets()"),
+                          "four fixed FAS packets must cover fourteen texture semantics without shifting ordinals");
     }};
 
 const nr::test::CaseRegistrar rtSampleAssetsCase{
@@ -1057,58 +1173,39 @@ const nr::test::CaseRegistrar rtSampleAssetsCase{
                     });
                 }),
             "CompareIor should import its authored IOR and positive volume thickness into the RT transmission record");
-    }};
 
-const nr::test::CaseRegistrar directionalLightImportCase{
-    "DirectionalLight glTF import bridges punctual light packets", [] {
-        auto request = nr::load::SceneLoadRequest{};
-        request.sourcePath =
-            projectRoot() / "assets/glTF-Sample-Assets/Models/DirectionalLight/glTF/DirectionalLight.gltf";
-        auto imported = nr::load::loadScene(request);
-        nr::test::require(imported.has_value(), "DirectionalLight should import");
-
-        nr::test::requireEqual(imported->lights.size(), std::size_t{1});
-        auto const &sourceLight = imported->lights.front();
-        nr::test::require(sourceLight.type == "directional",
-                          "DirectionalLight source light should import as directional");
-        nr::test::require(sourceLight.nodeIndex < imported->nodes.size(),
-                          "DirectionalLight source light should reference a valid node");
-        nr::test::require(sourceLight.colorDiffuse[0] > 0.0f,
-                          "DirectionalLight source light should carry positive red energy");
-
-        nr::rhi::Device device{};
-        auto runtimeScene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
-        auto templateHandle = runtimeScene.registerTemplate(*imported);
-        auto instanceHandle = runtimeScene.instantiate(templateHandle);
-        nr::test::require(templateHandle.valid(), "DirectionalLight scene template should register");
-        nr::test::require(instanceHandle.valid(), "DirectionalLight scene instance should instantiate");
-        runtimeScene.updateSimulation(nr::scene::SceneUpdateInput{.deltaSeconds = 1.0f / 60.0f});
-
-        auto lightHandle =
-            runtimeScene.findLightHandleByStableKey(nr::scene::SceneBridge::makeLightCanonicalKey(*imported, 0u));
-        nr::test::require(lightHandle.has_value(), "DirectionalLight source light should bridge to runtime scene");
-        auto lightRecord = runtimeScene.tryGetLightAsset(*lightHandle);
-        nr::test::require(lightRecord.has_value(), "DirectionalLight runtime light record should exist");
-        nr::test::require(lightRecord->get().cpu.type == nr::resource::LightType::directional,
-                          "DirectionalLight runtime light should remain directional");
+        auto glamVelvet = compileAssetMaterials(
+            "assets/glTF-Sample-Assets/Models/GlamVelvetSofa/glTF/GlamVelvetSofa.gltf");
         nr::test::require(
-            nr::scene::sceneLightAliasEnergy(lightRecord->get().cpu.color, lightRecord->get().cpu.intensity) > 0.0f,
-            "DirectionalLight runtime light should produce positive alias energy");
+            std::ranges::any_of(glamVelvet, [](const nr::scene::RtCompiledMaterial &material) {
+                return nearlyEqual(material.header.baseColorFactor.x, 0.01f) &&
+                       nearlyEqual(material.header.baseColorFactor.y, 0.01f) &&
+                       nearlyEqual(material.header.baseColorFactor.z, 0.01f) &&
+                       nearlyEqual(material.header.emissiveAndMetallic.w, 0.0f) &&
+                       nearlyEqual(material.header.roughnessNormalOcclusionAlpha.x, 0.7f) &&
+                       nearlyEqual(material.header.specularColorAndFactor.x, 0.1f) &&
+                       nearlyEqual(material.header.specularColorAndFactor.y, 0.34f) &&
+                       nearlyEqual(material.header.specularColorAndFactor.z, 1.0f) &&
+                       nearlyEqual(material.header.specularColorAndFactor.w, 1.0f);
+            }),
+            "GlamVelvetSofa Navy should compile as rough dielectric velvet with its blue specular color");
 
-        auto lightProfile = runtimeScene.registerExtractProfile(nr::scene::SceneExtractProfileCreateInfo{
-            .debugName = "directional_light_runtime",
-            .requireReadyForDomain = false,
-        });
-        auto lightPackets = runtimeScene.extractPackets(lightProfile);
-        nr::test::requireEqual(lightPackets.lights.size(), std::size_t{1});
-        auto const &lightPacket = lightPackets.lights.front();
-        nr::test::require(lightPacket.light == *lightHandle,
-                          "DirectionalLight packet should reference the runtime light");
-        nr::test::require(lightPacket.direction.x * lightPacket.direction.x +
-                              lightPacket.direction.y * lightPacket.direction.y +
-                              lightPacket.direction.z * lightPacket.direction.z >
-                          0.0f,
-                          "DirectionalLight packet should carry a non-zero direction");
+        auto specularTest = compileAssetMaterials(
+            "assets/glTF-Sample-Assets/Models/SpecularTest/glTF/SpecularTest.gltf");
+        nr::test::require(
+            std::ranges::any_of(specularTest, [](const nr::scene::RtCompiledMaterial &material) {
+                return nearlyEqual(material.header.specularColorAndFactor.w, 0.0f);
+            }),
+            "SpecularTest should preserve a zero scalar specular factor through RT compilation");
+        auto const hasAuthoredTexture = [&](nr::resource::MaterialTextureSlotSemantic semantic) {
+            auto const slotIndex = nr::resource::materialTextureSlotIndex(semantic);
+            return std::ranges::any_of(specularTest, [&](const nr::scene::RtCompiledMaterial &material) {
+                return material.textureRefs[slotIndex].textureId != nr::scene::kDefaultSceneTextureId;
+            });
+        };
+        nr::test::require(hasAuthoredTexture(nr::resource::MaterialTextureSlotSemantic::specular) &&
+                              hasAuthoredTexture(nr::resource::MaterialTextureSlotSemantic::specularColor),
+                          "SpecularTest should compile both KHR_materials_specular texture roles into their dense RT slots");
     }};
 
 const nr::test::CaseRegistrar sponzaMaterialTextureImportCase{

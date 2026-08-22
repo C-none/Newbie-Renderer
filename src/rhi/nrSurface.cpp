@@ -133,6 +133,124 @@ struct MonitorArea
 
 namespace nr::rhi
 {
+WindowInput::WindowInput(GLFWwindow *window) : window_(window)
+{
+    nrAssert(window_ != nullptr, "WindowInput requires a valid GLFW window.");
+    glfwSetWindowUserPointer(window_, this);
+    glfwSetScrollCallback(window_, [](GLFWwindow *window, double, double yOffset) {
+        auto *input = static_cast<WindowInput *>(glfwGetWindowUserPointer(window));
+        nrAssert(input != nullptr, "WindowInput scroll callback requires a window user pointer.");
+        if (std::isfinite(yOffset))
+        {
+            input->verticalScrollOffset_ += yOffset;
+        }
+    });
+    glfwSetCharCallback(window_, [](GLFWwindow *window, unsigned int codepoint) {
+        auto *input = static_cast<WindowInput *>(glfwGetWindowUserPointer(window));
+        nrAssert(input != nullptr, "WindowInput text input callback requires a window user pointer.");
+        input->textInputCodepoints_.push_back(static_cast<std::uint32_t>(codepoint));
+    });
+}
+
+WindowInput::WindowInput(WindowInput &&other) noexcept
+    : window_(std::exchange(other.window_, nullptr)),
+      verticalScrollOffset_(std::exchange(other.verticalScrollOffset_, 0.0)),
+      textInputCodepoints_(std::move(other.textInputCodepoints_))
+{
+    if (window_ != nullptr)
+    {
+        glfwSetWindowUserPointer(window_, this);
+    }
+}
+
+WindowInput &WindowInput::operator=(WindowInput &&other) noexcept
+{
+    if (this != &other)
+    {
+        unregisterCallbacks();
+        window_ = std::exchange(other.window_, nullptr);
+        verticalScrollOffset_ = std::exchange(other.verticalScrollOffset_, 0.0);
+        textInputCodepoints_ = std::move(other.textInputCodepoints_);
+        if (window_ != nullptr)
+        {
+            glfwSetWindowUserPointer(window_, this);
+        }
+    }
+    return *this;
+}
+
+WindowInput::~WindowInput()
+{
+    unregisterCallbacks();
+}
+
+void WindowInput::unregisterCallbacks() noexcept
+{
+    if (window_ == nullptr)
+    {
+        return;
+    }
+
+    nrAssert(glfwGetWindowUserPointer(window_) == this,
+             "WindowInput requires the GLFW window user pointer to remain owned by this instance.");
+    glfwSetScrollCallback(window_, nullptr);
+    glfwSetCharCallback(window_, nullptr);
+    glfwSetWindowUserPointer(window_, nullptr);
+    window_ = nullptr;
+}
+
+void WindowInput::pollEvents()
+{
+    verticalScrollOffset_ = 0.0;
+    glfwPollEvents();
+}
+
+bool WindowInput::keyDown(int glfwKeyCode) const
+{
+    if (window_ == nullptr)
+    {
+        return false;
+    }
+
+    auto state = glfwGetKey(window_, glfwKeyCode);
+    return state != 0;
+}
+
+bool WindowInput::mouseButtonDown(int glfwMouseButton) const
+{
+    if (window_ == nullptr)
+    {
+        return false;
+    }
+
+    return glfwGetMouseButton(window_, glfwMouseButton) != 0;
+}
+
+nr::math::Double2 WindowInput::cursorPosition() const
+{
+    if (window_ == nullptr)
+    {
+        return {};
+    }
+
+    auto x = 0.0;
+    auto y = 0.0;
+    glfwGetCursorPos(window_, &x, &y);
+    return nr::math::Double2{x, y};
+}
+
+double WindowInput::consumeVerticalScrollOffset() noexcept
+{
+    return std::exchange(verticalScrollOffset_, 0.0);
+}
+
+std::vector<std::uint32_t> WindowInput::consumeTextInputCodepoints()
+{
+    auto codepoints = std::move(textInputCodepoints_);
+    textInputCodepoints_.clear();
+    return codepoints;
+}
+
 Surface::GlfwContext::GlfwContext()
 {
     glfwSetErrorCallback(&GlfwContext::errorCallback);
@@ -183,6 +301,7 @@ void Surface::ensureGlfwInitialized()
         return {};
     }
     result.surface = vk::raii::SurfaceKHR(instance, rawSurface);
+    result.input.emplace(result.handle.get());
     result.refreshExtentFromFramebuffer();
     return result;
 }

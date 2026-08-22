@@ -10,8 +10,8 @@ import std;
  * @brief Thin RAII wrappers around VulkanMemoryAllocator (VMA)
  *
  * This is the lowest layer of the memory management stack:
- * - VmaBuffer:            RAII wrapper for VkBuffer + VmaAllocation pair
- * - VmaImage:             RAII wrapper for VkImage  + VmaAllocation pair
+ * - VmaResource<Kind>:    NTTP RAII wrapper for VkBuffer/VkImage + VmaAllocation pair
+ * - VmaBuffer/VmaImage:   aliases for VmaResource<Buffer> / VmaResource<Image>
  * - VmaPoolHandle:        RAII wrapper for VmaPool
  * - VmaAllocatorWrapper:  RAII wrapper for VmaAllocator + resource creation
  *
@@ -25,45 +25,126 @@ export namespace nr::rhi
 {
 
 // =========================================================================
-// VmaBuffer — RAII buffer + allocation pair
+// VmaResource — NTTP RAII resource + allocation pair
 // =========================================================================
 
-/**
- * @brief RAII wrapper owning a VkBuffer and its VmaAllocation
- *
- * Destruction calls vmaDestroyBuffer which frees both the Vulkan buffer
- * handle and the underlying device memory. Cached VmaAllocationInfo
- * provides zero-cost access to mapped pointer and size.
- */
-struct VmaBuffer
+enum class VmaResourceKind
 {
+    Buffer,
+    Image,
+};
+
+namespace detail
+{
+template <VmaResourceKind Kind>
+struct VmaResourceTraits;
+
+template <>
+struct VmaResourceTraits<VmaResourceKind::Buffer>
+{
+    using HandleType = VkBuffer;
+    static void destroy(VmaAllocator allocator, VkBuffer handle, VmaAllocation allocation)
+    {
+        vmaDestroyBuffer(allocator, handle, allocation);
+    }
+};
+
+template <>
+struct VmaResourceTraits<VmaResourceKind::Image>
+{
+    using HandleType = VkImage;
+    static void destroy(VmaAllocator allocator, VkImage handle, VmaAllocation allocation)
+    {
+        vmaDestroyImage(allocator, handle, allocation);
+    }
+};
+} // namespace detail
+
+/**
+ * @brief RAII wrapper owning a VMA-managed resource and its VmaAllocation
+ *
+ * @tparam Kind VmaResourceKind::Buffer or VmaResourceKind::Image
+ *
+ * Destruction calls vmaDestroyBuffer / vmaDestroyImage (selected by Kind)
+ * which frees both the Vulkan handle and the underlying device memory.
+ * Cached VmaAllocationInfo provides zero-cost access to mapped pointer and size.
+ */
+template <VmaResourceKind Kind>
+struct VmaResource
+{
+    using HandleType = typename detail::VmaResourceTraits<Kind>::HandleType;
+
     VmaAllocator allocator = nullptr;
-    VkBuffer buffer = nullptr;
+    HandleType resource = nullptr;
     VmaAllocation allocation = nullptr;
     VmaAllocationInfo info{};
 
-    VmaBuffer() = default;
+    VmaResource() = default;
 
-    VmaBuffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation mem, VmaAllocationInfo allocInfo);
+    VmaResource(VmaAllocator alloc, HandleType res, VmaAllocation mem, VmaAllocationInfo allocInfo)
+        : allocator(alloc), resource(res), allocation(mem), info(allocInfo)
+    {
+    }
 
-    ~VmaBuffer();
+    ~VmaResource()
+    {
+        if (resource != nullptr)
+        {
+            detail::VmaResourceTraits<Kind>::destroy(allocator, resource, allocation);
+        }
+    }
 
     // Move-only
-    VmaBuffer(const VmaBuffer &) = delete;
-    VmaBuffer &operator=(const VmaBuffer &) = delete;
+    VmaResource(const VmaResource &) = delete;
+    VmaResource &operator=(const VmaResource &) = delete;
 
-    VmaBuffer(VmaBuffer &&other) noexcept;
+    VmaResource(VmaResource &&other) noexcept
+        : allocator(other.allocator), resource(other.resource), allocation(other.allocation), info(other.info)
+    {
+        other.allocator = nullptr;
+        other.resource = nullptr;
+        other.allocation = nullptr;
+        other.info = {};
+    }
 
-    VmaBuffer &operator=(VmaBuffer &&other) noexcept;
+    VmaResource &operator=(VmaResource &&other) noexcept
+    {
+        if (this != &other)
+        {
+            if (resource != nullptr)
+            {
+                detail::VmaResourceTraits<Kind>::destroy(allocator, resource, allocation);
+            }
+            allocator = other.allocator;
+            resource = other.resource;
+            allocation = other.allocation;
+            info = other.info;
+            other.allocator = nullptr;
+            other.resource = nullptr;
+            other.allocation = nullptr;
+            other.info = {};
+        }
+        return *this;
+    }
 
-    /// Check if this buffer holds a valid allocation
-    [[nodiscard]] bool valid() const noexcept;
+    /// Check if this resource holds a valid allocation
+    [[nodiscard]] bool valid() const noexcept
+    {
+        return resource != nullptr;
+    }
 
     /// Get the persistently mapped pointer (nullptr if not mapped)
-    [[nodiscard]] void *mapped() const noexcept;
+    [[nodiscard]] void *mapped() const noexcept
+        requires(Kind == VmaResourceKind::Buffer)
+    {
+        return info.pMappedData;
+    }
 
-    /// Get the raw VkBuffer handle
-    [[nodiscard]] VkBuffer handle() const noexcept;
+    /// Get the raw resource handle
+    [[nodiscard]] HandleType handle() const noexcept
+    {
+        return resource;
+    }
 
     /**
      * @brief Get the buffer device address (BDA)
@@ -73,61 +154,43 @@ struct VmaBuffer
      * Requires the buffer to have been created with
      * VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT.
      */
-    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device &device) const noexcept;
+    [[nodiscard]] VkDeviceAddress deviceAddress(const vk::raii::Device &device) const noexcept
+        requires(Kind == VmaResourceKind::Buffer)
+    {
+        return static_cast<VkDeviceAddress>(device.getBufferAddress(vk::BufferDeviceAddressInfo{vk::Buffer{resource}}));
+    }
 
     /**
      * @brief Flush host writes to make them visible to the device.
      *
      * VMA internally handles non-coherent atom-size alignment.
      */
-    void flush(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const;
+    void flush(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const
+        requires(Kind == VmaResourceKind::Buffer)
+    {
+        if (allocation == nullptr)
+            return;
+        auto result = vmaFlushAllocation(allocator, allocation, offset, size);
+        nrAssert(result == VK_SUCCESS, "vmaFlushAllocation failed: {}", static_cast<int>(result));
+    }
 
     /**
      * @brief Invalidate host cache to make device writes visible to the CPU.
      *
      * VMA internally handles non-coherent atom-size alignment.
      */
-    void invalidate(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const;
+    void invalidate(VkDeviceSize offset = 0, VkDeviceSize size = std::numeric_limits<VkDeviceSize>::max()) const
+        requires(Kind == VmaResourceKind::Buffer)
+    {
+        if (allocation == nullptr)
+            return;
+        auto result = vmaInvalidateAllocation(allocator, allocation, offset, size);
+        nrAssert(result == VK_SUCCESS, "vmaInvalidateAllocation failed: {}", static_cast<int>(result));
+    }
 };
 
-// =========================================================================
-// VmaImage — RAII image + allocation pair
-// =========================================================================
-
-/**
- * @brief RAII wrapper owning a VkImage and its VmaAllocation
- *
- * Destruction calls vmaDestroyImage. Images are typically GPU-only
- * and do not expose mapped pointer access.
- */
-struct VmaImage
-{
-    VmaAllocator allocator = nullptr;
-    VkImage image = nullptr;
-    VmaAllocation allocation = nullptr;
-    VmaAllocationInfo info{};
-
-    VmaImage() = default;
-
-    VmaImage(VmaAllocator alloc, VkImage img, VmaAllocation mem, VmaAllocationInfo allocInfo);
-
-    ~VmaImage();
-
-    // Move-only
-    VmaImage(const VmaImage &) = delete;
-    VmaImage &operator=(const VmaImage &) = delete;
-
-    VmaImage(VmaImage &&other) noexcept;
-
-    VmaImage &operator=(VmaImage &&other) noexcept;
-
-    /// Check if this image holds a valid allocation
-    [[nodiscard]] bool valid() const noexcept;
-
-    /// Get the raw VkImage handle
-    [[nodiscard]] VkImage handle() const noexcept;
-
-};
+using VmaBuffer = VmaResource<VmaResourceKind::Buffer>;
+using VmaImage  = VmaResource<VmaResourceKind::Image>;
 
 // =========================================================================
 // VmaPoolHandle — RAII wrapper for VmaPool
@@ -146,8 +209,6 @@ struct VmaPoolHandle
     std::optional<VmaPoolCreateInfo> createInfo{};
 
     VmaPoolHandle() = default;
-
-    VmaPoolHandle(VmaAllocator alloc, VmaPool p);
 
     VmaPoolHandle(VmaAllocator alloc, VmaPool p, const VmaPoolCreateInfo &info);
 

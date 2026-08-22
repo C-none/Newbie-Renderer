@@ -6,51 +6,6 @@ import std;
 
 namespace nr::rhi
 {
-void CommandRecorder::beginPrimary(const vk::raii::CommandBuffer &commandBuffer, vk::CommandBufferUsageFlags flags)
-{
-    vk::CommandBufferBeginInfo beginInfo{flags};
-    commandBuffer.begin(beginInfo);
-}
-
-void CommandRecorder::beginSecondary(const vk::raii::CommandBuffer &commandBuffer,
-                                     const vk::CommandBufferInheritanceInfo &inheritanceInfo,
-                                     vk::CommandBufferUsageFlags flags)
-{
-    vk::CommandBufferBeginInfo beginInfo{flags, &inheritanceInfo};
-    commandBuffer.begin(beginInfo);
-}
-
-void CommandRecorder::end(const vk::raii::CommandBuffer &commandBuffer)
-{
-    commandBuffer.end();
-}
-
-ScopedCommandBuffer::ScopedCommandBuffer(const vk::raii::CommandBuffer &commandBuffer,
-                                         vk::CommandBufferUsageFlags flags)
-    : commandBuffer_(commandBuffer)
-{
-    CommandRecorder::beginPrimary(commandBuffer, flags);
-}
-
-ScopedCommandBuffer::ScopedCommandBuffer(const vk::raii::CommandBuffer &commandBuffer,
-                                         const vk::CommandBufferInheritanceInfo &inheritanceInfo,
-                                         vk::CommandBufferUsageFlags flags)
-    : commandBuffer_(commandBuffer)
-{
-    CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo, flags);
-}
-
-ScopedCommandBuffer::~ScopedCommandBuffer()
-{
-    // Reference is always valid (bound at construction)
-    commandBuffer_.end();
-}
-
-[[nodiscard]] const vk::raii::CommandBuffer &ScopedCommandBuffer::get() const noexcept
-{
-    return commandBuffer_;
-}
-
 ScopedCommandBufferDebugLabel::ScopedCommandBufferDebugLabel(const vk::raii::CommandBuffer &commandBuffer,
                                                              std::string_view label)
     : commandBuffer_(std::cref(commandBuffer)), label_(label)

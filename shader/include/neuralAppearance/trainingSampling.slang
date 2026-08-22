@@ -1,11 +1,11 @@
 module trainingSampling;
 import common;
+import include.neuralAppearance.halfVectorConditionalCdf;
 import include.neuralAppearance.layout;
 
 public static const float kNeuralAppearanceTrainingPi = 3.14159265358979323846f;
 public static const float kNeuralAppearanceTrainingTwoPi =
     2.0f * kNeuralAppearanceTrainingPi;
-public static const uint kNeuralAppearanceDirectionSamplingAttempts = 64u;
 
 public struct NeuralAppearanceDirectionPair
 {
@@ -55,9 +55,8 @@ public float neuralAppearanceTrainingRandom(uint sampleSeed, uint dimension)
     return (float(bits) + 0.5f) / 16777216.0f;
 }
 
-// Rusinkiewicz parameterization: the half vector pins the specular peak so a
-// uniform sweep of (thetaH, thetaD, phiH, phiD) keeps highlight coverage dense
-// without importance sampling the analytic lobe.
+// Rusinkiewicz parameterization exposes the half vector directly, keeping
+// specular-peak coverage independent from the analytic material lobe.
 public NeuralAppearanceDirectionPair neuralAppearanceRusinkiewiczDirectionPair(
     float thetaH, float thetaD, float phiH, float phiD)
 {
@@ -83,34 +82,56 @@ public NeuralAppearanceDirectionPair neuralAppearanceRusinkiewiczDirectionPair(
         halfDirection * cosThetaD - radial);
 }
 
+float neuralAppearanceMaximumDifferenceAngle(float thetaH, float phiD)
+{
+    float cosineH = cos(thetaH);
+    float radialY = sin(thetaH) * abs(cos(phiD));
+    float radius = length(float2(cosineH, radialY));
+    float boundaryAngle = acos(saturate(kNeuralAppearanceHalfVectorDirectionMinimumCosine / radius));
+    return max(boundaryAngle - atan2(radialY, cosineH), 0.0f);
+}
+
+float neuralAppearanceConditionalDifferenceAzimuth(float thetaH, float unitValue)
+{
+    float quadrantCoordinate = unitValue * 4.0f;
+    uint quadrant = min(uint(quadrantCoordinate), 3u);
+    float localUnit = frac(quadrantCoordinate);
+    float quarterAzimuth = neuralAppearanceHalfVectorDifferenceAzimuthInverseCdf(thetaH, localUnit);
+    if (quadrant == 0u)
+    {
+        return quarterAzimuth;
+    }
+    if (quadrant == 1u)
+    {
+        return kNeuralAppearanceTrainingPi - quarterAzimuth;
+    }
+    if (quadrant == 2u)
+    {
+        return kNeuralAppearanceTrainingPi + quarterAzimuth;
+    }
+    return kNeuralAppearanceTrainingTwoPi - quarterAzimuth;
+}
+
+// Uniform thetaH plus the conditional valid-domain CDF is intentional. In the
+// paired eight-seed experiment it reduced balanced held-out FP16 loss versus
+// rejection sampling, while solid-angle-uniform half vectors over-allocated
+// grazing samples and regressed the full-domain stratum. The inverse-CDF LUT is
+// needed only for phiD: thetaDMaximum is analytic, but its integral over phiD
+// has no practical closed-form inverse. Sampling thetaD inside that boundary
+// produces one valid upper-hemisphere View/Light pair without retries or a
+// wave-divergent fallback path.
 public NeuralAppearanceDirectionPair neuralAppearanceTrainingDirectionPair(
     uint sampleSeed, uint dimensionOffset)
 {
-    for (uint attempt = 0u; attempt < kNeuralAppearanceDirectionSamplingAttempts; ++attempt)
-    {
-        uint dimension = dimensionOffset + attempt * 4u;
-        float thetaH = neuralAppearanceTrainingRandom(sampleSeed, dimension + 0u) *
-                       (0.5f * kNeuralAppearanceTrainingPi);
-        float thetaD = neuralAppearanceTrainingRandom(sampleSeed, dimension + 1u) *
-                       (0.5f * kNeuralAppearanceTrainingPi);
-        float phiH = neuralAppearanceTrainingRandom(sampleSeed, dimension + 2u) *
-                     kNeuralAppearanceTrainingTwoPi;
-        float phiD = neuralAppearanceTrainingRandom(sampleSeed, dimension + 3u) *
-                     kNeuralAppearanceTrainingTwoPi;
-        NeuralAppearanceDirectionPair pair = neuralAppearanceRusinkiewiczDirectionPair(
-            thetaH, thetaD, phiH, phiD);
-        // Both directions stay in the geometric upper hemisphere, which is the
-        // domain the folded reflection is defined on.
-        if (pair.viewDirection.y >= 1.0e-3f && pair.lightDirection.y >= 1.0e-3f)
-        {
-            return pair;
-        }
-    }
-
-    // This path is deterministic and valid even if every rejection sample is grazing.
-    return NeuralAppearanceDirectionPair(
-        float3(0.0f, 1.0f, 0.0f),
-        float3(0.0f, 1.0f, 0.0f));
+    float thetaH = neuralAppearanceTrainingRandom(sampleSeed, dimensionOffset + 0u) *
+                   kNeuralAppearanceHalfVectorThetaMaximum;
+    float thetaDUnit = neuralAppearanceTrainingRandom(sampleSeed, dimensionOffset + 1u);
+    float phiH = neuralAppearanceTrainingRandom(sampleSeed, dimensionOffset + 2u) *
+                 kNeuralAppearanceTrainingTwoPi;
+    float phiD = neuralAppearanceConditionalDifferenceAzimuth(
+        thetaH, neuralAppearanceTrainingRandom(sampleSeed, dimensionOffset + 3u));
+    float thetaD = thetaDUnit * neuralAppearanceMaximumDifferenceAngle(thetaH, phiD);
+    return neuralAppearanceRusinkiewiczDirectionPair(thetaH, thetaD, phiH, phiD);
 }
 
 public float neuralAppearanceTrainingCosineSchedule(

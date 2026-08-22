@@ -1,4 +1,5 @@
 module nr.renderPasses;
+import dependency.dlss;
 import dependency.vulkan;
 import dependency.shaderShare;
 
@@ -75,7 +76,7 @@ struct PathTracingGuideSpec
     std::string_view debugName{};
     std::string_view shaderBinding{};
     vk::Format format = vk::Format::eUndefined;
-    nr::rhi::DlssRayReconstructionResourceSlot dlssSlot{};
+    nr::dependency::dlss::RayReconstructionResourceSlot dlssSlot{};
     std::array<float, 4u> unavailableClear{};
 };
 
@@ -103,7 +104,7 @@ struct PathTracingRuntimeCache
 [[nodiscard]] std::array<PathTracingGuideSpec, kPathTracingGuideResourceCount> makePathTracingGuideSpecs(
     vk::Format colorFormat)
 {
-    using DlssSlot = nr::rhi::DlssRayReconstructionResourceSlot;
+    using DlssSlot = nr::dependency::dlss::RayReconstructionResourceSlot;
     return {
         PathTracingGuideSpec{
             .debugName = "Color",
@@ -682,7 +683,7 @@ void publishPathTracingGuides(
     auto guideIndices = std::views::iota(std::size_t{0u}, kPathTracingGuideResourceCount);
     std::ranges::for_each(guideIndices, [&](std::size_t index) {
         context.publishFrameResource(
-            std::format("dlss.rr.input.{}", nr::rhi::dlssResourceSlotName(specs[index].dlssSlot)), resources[index]);
+            std::format("dlss.rr.input.{}", nr::dependency::dlss::resourceSlotName(specs[index].dlssSlot)), resources[index]);
     });
     context.publishFrameResource(nr::renderer::frameResource::presentSourceColor,
                                  resources[guideIndex(PathTracingGuideResource::color)]);

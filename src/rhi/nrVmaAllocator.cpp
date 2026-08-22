@@ -8,138 +8,6 @@ import std;
 
 namespace nr::rhi
 {
-VmaBuffer::VmaBuffer(VmaAllocator alloc, VkBuffer buf, VmaAllocation mem, VmaAllocationInfo allocInfo)
-    : allocator(alloc), buffer(buf), allocation(mem), info(allocInfo)
-{
-}
-
-VmaBuffer::~VmaBuffer()
-{
-    if (buffer != nullptr)
-    {
-        vmaDestroyBuffer(allocator, buffer, allocation);
-    }
-}
-
-VmaBuffer::VmaBuffer(VmaBuffer &&other) noexcept
-    : allocator(other.allocator), buffer(other.buffer), allocation(other.allocation), info(other.info)
-{
-    other.allocator = nullptr;
-    other.buffer = nullptr;
-    other.allocation = nullptr;
-    other.info = {};
-}
-
-VmaBuffer &VmaBuffer::operator=(VmaBuffer &&other) noexcept
-{
-    if (this != &other)
-    {
-        if (buffer != nullptr)
-        {
-            vmaDestroyBuffer(allocator, buffer, allocation);
-        }
-        allocator = other.allocator;
-        buffer = other.buffer;
-        allocation = other.allocation;
-        info = other.info;
-        other.allocator = nullptr;
-        other.buffer = nullptr;
-        other.allocation = nullptr;
-        other.info = {};
-    }
-    return *this;
-}
-
-[[nodiscard]] bool VmaBuffer::valid() const noexcept
-{
-    return buffer != nullptr;
-}
-
-[[nodiscard]] void *VmaBuffer::mapped() const noexcept
-{
-    return info.pMappedData;
-}
-
-[[nodiscard]] VkBuffer VmaBuffer::handle() const noexcept
-{
-    return buffer;
-}
-
-[[nodiscard]] VkDeviceAddress VmaBuffer::deviceAddress(const vk::raii::Device &device) const noexcept
-{
-    return static_cast<VkDeviceAddress>(device.getBufferAddress(vk::BufferDeviceAddressInfo{vk::Buffer{buffer}}));
-}
-
-void VmaBuffer::flush(VkDeviceSize offset, VkDeviceSize size) const
-{
-    if (allocation == nullptr)
-        return;
-    auto result = vmaFlushAllocation(allocator, allocation, offset, size);
-    nrAssert(result == VK_SUCCESS, "vmaFlushAllocation failed: {}", static_cast<int>(result));
-}
-
-void VmaBuffer::invalidate(VkDeviceSize offset, VkDeviceSize size) const
-{
-    if (allocation == nullptr)
-        return;
-    auto result = vmaInvalidateAllocation(allocator, allocation, offset, size);
-    nrAssert(result == VK_SUCCESS, "vmaInvalidateAllocation failed: {}", static_cast<int>(result));
-}
-
-VmaImage::VmaImage(VmaAllocator alloc, VkImage img, VmaAllocation mem, VmaAllocationInfo allocInfo)
-    : allocator(alloc), image(img), allocation(mem), info(allocInfo)
-{
-}
-
-VmaImage::~VmaImage()
-{
-    if (image != nullptr)
-    {
-        vmaDestroyImage(allocator, image, allocation);
-    }
-}
-
-VmaImage::VmaImage(VmaImage &&other) noexcept
-    : allocator(other.allocator), image(other.image), allocation(other.allocation), info(other.info)
-{
-    other.image = nullptr;
-    other.allocation = nullptr;
-    other.info = {};
-}
-
-VmaImage &VmaImage::operator=(VmaImage &&other) noexcept
-{
-    if (this != &other)
-    {
-        if (image != nullptr)
-        {
-            vmaDestroyImage(allocator, image, allocation);
-        }
-        allocator = other.allocator;
-        image = other.image;
-        allocation = other.allocation;
-        info = other.info;
-        other.image = nullptr;
-        other.allocation = nullptr;
-        other.info = {};
-    }
-    return *this;
-}
-
-[[nodiscard]] bool VmaImage::valid() const noexcept
-{
-    return image != nullptr;
-}
-
-[[nodiscard]] VkImage VmaImage::handle() const noexcept
-{
-    return image;
-}
-
-VmaPoolHandle::VmaPoolHandle(VmaAllocator alloc, VmaPool p) : allocator(alloc), pool(p)
-{
-}
-
 VmaPoolHandle::VmaPoolHandle(VmaAllocator alloc, VmaPool p, const VmaPoolCreateInfo &info)
     : allocator(alloc), pool(p), createInfo(info)
 {
@@ -260,7 +128,7 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
     VkResult result = vmaCreateBuffer(allocator_, &cBufferInfo, &allocInfo, &buffer, &allocation, &resultInfo);
     nrAssert(result == VK_SUCCESS, "vmaCreateBuffer failed: {}", static_cast<int>(result));
 
-    return VmaBuffer(allocator_, buffer, allocation, resultInfo);
+    return VmaBuffer{allocator_, buffer, allocation, resultInfo};
 }
 
 [[nodiscard]] VmaImage VmaAllocatorWrapper::createImage(const vk::ImageCreateInfo &imageInfo,
@@ -275,7 +143,7 @@ VmaAllocatorWrapper &VmaAllocatorWrapper::operator=(VmaAllocatorWrapper &&other)
     VkResult result = vmaCreateImage(allocator_, &cImageInfo, &allocInfo, &image, &allocation, &resultInfo);
     nrAssert(result == VK_SUCCESS, "vmaCreateImage failed: {}", static_cast<int>(result));
 
-    return VmaImage(allocator_, image, allocation, resultInfo);
+    return VmaImage{allocator_, image, allocation, resultInfo};
 }
 
 [[nodiscard]] VmaPoolHandle VmaAllocatorWrapper::createPool(const VmaPoolCreateInfo &poolInfo) const

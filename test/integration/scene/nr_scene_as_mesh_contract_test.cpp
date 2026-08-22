@@ -552,8 +552,7 @@ void uploadSceneGeometry(nr::scene::Scene &scene, nr::rhi::Device &device, nr::r
 // beginFrame/uploadPending/fence-reap lifecycle instead of mutating Scene asset records from a CPU-only test.
 const nr::test::CaseRegistrar readinessCase{
     "scene extraction applies domain-specific residency readiness", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_residency_readiness_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_residency_readiness_contract_test", "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{
             .device = device,
@@ -668,8 +667,7 @@ const nr::test::CaseRegistrar readinessCase{
 
 const nr::test::CaseRegistrar anisotropyReadinessCase{
     "scene extraction keeps raster strict while RT accepts unavailable anisotropy", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_anisotropy_readiness_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_anisotropy_readiness_contract_test", "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{
             .device = device,
@@ -726,8 +724,7 @@ const nr::test::CaseRegistrar anisotropyReadinessCase{
 
 const nr::test::CaseRegistrar rasterBridgeResolutionCase{
     "ready raster extraction resolves atlas ranges, material state, and texture handles", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_raster_bridge_resolution_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_raster_bridge_resolution_contract_test", "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
         auto sceneAsset = makeRasterBridgeResolutionSceneAsset();
@@ -840,8 +837,7 @@ const nr::test::CaseRegistrar rasterBridgeResolutionCase{
 
 const nr::test::CaseRegistrar asMeshFlagsCase{
     "scene AS mesh query derives instance and geometry flags from mesh and material state", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_as_mesh_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_as_mesh_contract_test", "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
         auto sceneAsset = makeAsMeshSceneAsset();
@@ -958,8 +954,7 @@ const nr::test::CaseRegistrar asMeshFlagsCase{
 
 const nr::test::CaseRegistrar graphicsSyncLifetimeCase{
     "scene defers submitted asset collection and drains submitted graphics work on destruction", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_graphics_sync_lifetime_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_graphics_sync_lifetime_contract_test", "NewbieRenderer");
 
         {
             auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
@@ -1007,8 +1002,8 @@ const nr::test::CaseRegistrar uploadBudgetForwardProgressCase{
     "scene upload budget preserves normal ordering and advances one oversized asset per frame", [] {
         constexpr auto uploadBudget = std::size_t{64u * 1024u};
 
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_upload_budget_forward_progress_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_upload_budget_forward_progress_contract_test",
+                                              "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{
             .device = device,
@@ -1118,8 +1113,8 @@ const nr::test::CaseRegistrar geometryAtlasRetiredSliceReuseCase{
         constexpr auto vertexStride = vk::DeviceSize{sizeof(nr::resource::Vertex)};
         constexpr auto indexStride = vk::DeviceSize{sizeof(std::uint32_t)};
 
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_geometry_atlas_retired_slice_reuse_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_geometry_atlas_retired_slice_reuse_contract_test",
+                                              "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
         auto completeCurrentFrameUploads = [&] {
@@ -1258,8 +1253,7 @@ const nr::test::CaseRegistrar geometryAtlasRetiredSliceReuseCase{
 
 const nr::test::CaseRegistrar geometryAtlasGrowVisibilityCase{
     "scene atlas replacement hides pending geometry and invalidates cached AS addresses by generation", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_scene_atlas_grow_visibility_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_scene_atlas_grow_visibility_contract_test", "NewbieRenderer");
 
         auto scene = nr::scene::Scene(nr::scene::SceneCreateInfo{.device = device});
         auto initialAsset = makeAsMeshSceneAsset();

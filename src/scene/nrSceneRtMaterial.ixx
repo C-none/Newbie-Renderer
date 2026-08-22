@@ -66,8 +66,9 @@ struct RtMaterialTable
 
 [[nodiscard]] RtCompiledMaterial makeFallbackRtMaterial();
 
-static_assert(sizeof(RtMaterialHeader) == 112u);
+static_assert(sizeof(RtMaterialHeader) == 128u);
 static_assert(nr::memberOffset<&RtMaterialHeader::anisotropy>() == 96u);
+static_assert(nr::memberOffset<&RtMaterialHeader::specularColorAndFactor>() == 112u);
 static_assert(sizeof(RtMaterialLayerRecord) == 44u);
 static_assert(sizeof(RtMaterialTextureRef) == 32u);
 static_assert(nr::memberOffset<&RtMaterialTextureRef::uvLinear>() == 0u);

@@ -50,7 +50,8 @@ void requireSceneImportValid(std::string_view label, const nr::load::SceneAsset 
     request.sourcePath = projectRoot() / relativeSourcePath;
 
     auto importResult = nr::load::loadScene(request);
-    nr::test::require(importResult.has_value(), std::format("{} should import successfully", label));
+    auto importError = importResult.has_value() ? std::string{} : importResult.error().message;
+    nr::test::require(importResult.has_value(), std::format("{} should import successfully: {}", label, importError));
     requireSceneImportValid(label, importResult.value());
     return std::move(importResult).value();
 }
@@ -280,7 +281,82 @@ void requireTextureTransformCase()
                                            almostEqual(vertex.texCoord1[1], 0.75f);
                                 });
                             }),
-        "glTF TEXCOORD_1 should be ingested with the same restored image-space V orientation as TEXCOORD_0");
+                      "glTF TEXCOORD_1 should be ingested with the same restored image-space V orientation as TEXCOORD_0");
+}
+
+void requireGlamVelvetSpecularCase()
+{
+    auto scene = loadSceneCase("GlamVelvetSofa KHR_materials_specular",
+                               std::filesystem::path{
+                                   "assets/glTF-Sample-Assets/Models/GlamVelvetSofa/glTF/GlamVelvetSofa.gltf"});
+    auto const &navy = requireMaterial(scene, "GlamVelvetSofa_fabric_navy");
+
+    nr::test::require(!navy.specularGlossiness.has_value(),
+                      "Navy velvet must not be classified as a legacy specular-glossiness material");
+    nr::test::require(navy.specular.has_value(), "Navy velvet should retain KHR_materials_specular factors");
+    auto const &specular = *navy.specular;
+    nr::test::require(almostEqual(specular.factor, 1.0f), "Navy velvet should retain the default scalar specular factor");
+    nr::test::require(almostEqual(specular.colorFactor[0], 0.1f) && almostEqual(specular.colorFactor[1], 0.34f) &&
+                          almostEqual(specular.colorFactor[2], 1.0f),
+                      "Navy velvet should retain its blue RGB specular color factor");
+    nr::test::require(almostEqual(navy.baseColorFactor[0], 0.01f) && almostEqual(navy.baseColorFactor[1], 0.01f) &&
+                          almostEqual(navy.baseColorFactor[2], 0.01f) && almostEqual(navy.metallicFactor, 0.0f) &&
+                          almostEqual(navy.roughnessFactor, 0.7f),
+                      "KHR_materials_specular must not convert Navy velvet's metallic-roughness factors");
+    nr::test::require(navy.normalScale.has_value() && almostEqual(*navy.normalScale, 0.75f),
+                      "Navy velvet should retain normalTexture.scale from $tex.scale(NORMALS, 0)");
+    nr::test::require(navy.occlusionStrength.has_value() && almostEqual(*navy.occlusionStrength, 1.0f),
+                      "Navy velvet should retain occlusionTexture.strength from $tex.strength(LIGHTMAP, 0)");
+}
+
+void requireSpecularExtensionTextureCase()
+{
+    auto scene = loadSceneCase("SpecularTest KHR_materials_specular",
+                               std::filesystem::path{
+                                   "assets/glTF-Sample-Assets/Models/SpecularTest/glTF/SpecularTest.gltf"});
+
+    auto const &zeroFactor = requireMaterial(scene, "M1.1_specFac");
+    nr::test::require(zeroFactor.specular.has_value() && almostEqual(zeroFactor.specular->factor, 0.0f),
+                      "KHR_materials_specular specularFactor=0 must be preserved as a scalar factor");
+    nr::test::require(!zeroFactor.specularGlossiness.has_value(),
+                      "KHR_materials_specular specularFactor=0 must not select the legacy workflow");
+
+    auto const &specularTexture = requireMaterial(scene, "M2_SpecTex");
+    nr::test::require(specularTexture.specular.has_value() && almostEqual(specularTexture.specular->factor, 1.0f),
+                      "specularTexture should retain the extension's default scalar factor");
+    static_cast<void>(requireTextureBinding(specularTexture, nr::resource::MaterialTextureSlotSemantic::specular));
+
+    auto const &specularColorTexture = requireMaterial(scene, "M4_whiteTex");
+    nr::test::require(specularColorTexture.specular.has_value(),
+                      "specularColorTexture should retain the KHR_materials_specular block");
+    static_cast<void>(
+        requireTextureBinding(specularColorTexture, nr::resource::MaterialTextureSlotSemantic::specularColor));
+}
+
+void requireLegacySpecularGlossinessCase()
+{
+    auto scene = loadSceneCase("SpecGlossVsMetalRough legacy specular-glossiness",
+                               std::filesystem::path{
+                                   "assets/glTF-Sample-Assets/Models/SpecGlossVsMetalRough/glTF/SpecGlossVsMetalRough.gltf"});
+    auto const &legacy = requireMaterial(scene, "BottleMat_SpecGloss");
+
+    nr::test::require(!legacy.specular.has_value(),
+                      "legacy specular-glossiness must not populate KHR_materials_specular data");
+    nr::test::require(legacy.specularGlossiness.has_value(),
+                      "legacy specular-glossiness should retain a distinct authoring block");
+    auto const &factors = *legacy.specularGlossiness;
+    nr::test::require(almostEqual(factors.diffuseFactor[0], 1.0f) && almostEqual(factors.diffuseFactor[1], 1.0f) &&
+                          almostEqual(factors.diffuseFactor[2], 1.0f) && almostEqual(factors.diffuseFactor[3], 1.0f) &&
+                          almostEqual(factors.specularFactor[0], 1.0f) && almostEqual(factors.specularFactor[1], 1.0f) &&
+                          almostEqual(factors.specularFactor[2], 1.0f) && almostEqual(factors.glossinessFactor, 1.0f),
+                      "legacy specular-glossiness factors should retain their defaults for bridge conversion");
+
+    auto specularGlossinessTexture = std::ranges::find_if(legacy.textures, [](const auto &binding) {
+        return binding.sourceSemanticName == "specular";
+    });
+    nr::test::require(specularGlossinessTexture != legacy.textures.end() &&
+                          specularGlossinessTexture->semantic == nr::resource::MaterialTextureSlotSemantic::unsupported,
+                      "legacy specularGlossinessTexture must remain unsupported until baked conversion is implemented");
 }
 
 void requireMeshGpuInstancingCase(std::string_view label, const std::filesystem::path &relativeSourcePath)
@@ -365,6 +441,15 @@ const nr::test::CaseRegistrar glbDuckCase{
 
 const nr::test::CaseRegistrar gltfTextureTransformCase{"load smoke imports UV1 and KHR_texture_transform metadata",
                                                        [] { requireTextureTransformCase(); }};
+
+const nr::test::CaseRegistrar gltfGlamVelvetSpecularCase{
+    "load smoke preserves GlamVelvetSofa KHR_materials_specular factors", [] { requireGlamVelvetSpecularCase(); }};
+
+const nr::test::CaseRegistrar gltfSpecularExtensionTextureCase{
+    "load smoke preserves KHR_materials_specular scalar and texture slots", [] { requireSpecularExtensionTextureCase(); }};
+
+const nr::test::CaseRegistrar gltfLegacySpecularGlossinessCase{
+    "load smoke separates legacy specular-glossiness data", [] { requireLegacySpecularGlossinessCase(); }};
 
 const nr::test::CaseRegistrar gltfNormalTextureTangentCase{
     "load smoke generates MikkTSpace tangents from normal texture effective UVs",

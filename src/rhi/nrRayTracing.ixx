@@ -84,20 +84,7 @@ struct TraceRaysDesc
 
 namespace nr::rhi::rt_detail
 {
-struct ValidationResult
-{
-    bool isValid = false;
-    std::string message{};
-};
-
-[[nodiscard]] ValidationResult validationSuccess();
-
-[[nodiscard]] ValidationResult validationFailure(std::string message);
-
-template <typename... Args> [[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
-{
-    return std::vformat(format, std::make_format_args(args...));
-}
+using nr::rhi::detail::ValidationResult;
 
 [[nodiscard]] std::uint32_t recordCount(const ShaderBindingTableSectionDesc &section);
 

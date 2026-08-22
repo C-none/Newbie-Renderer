@@ -1,5 +1,6 @@
 module nr.pipeline;
 
+import dependency.dlss;
 import nr.app;
 import nr.options;
 import nr.renderer;
@@ -33,9 +34,9 @@ namespace
         dlssRayReconstruction->setResolutionController(dlssResolutionController);
         dlssRayReconstruction->input.enabled = true;
         dlssRayReconstruction->input.create.quality = context.rtDlssQuality == RtDlssQuality::ultraPerformance
-                                                          ? nr::rhi::DlssQuality::UltraPerformance
-                                                          : nr::rhi::DlssQuality::Dlaa;
-        dlssRayReconstruction->input.create.depthType = nr::rhi::DlssDepthType::Hardware;
+                                                          ? nr::dependency::dlss::Quality::UltraPerformance
+                                                          : nr::dependency::dlss::Quality::Dlaa;
+        dlssRayReconstruction->input.create.depthType = nr::dependency::dlss::DepthType::Hardware;
         dlssRayReconstruction->input.outputColorKey = std::string{nr::renderer::frameResource::presentSourceColor};
         postProcessing = std::move(dlssRayReconstruction);
         postProcessingName = "DlssRayReconstruction";
@@ -57,7 +58,7 @@ namespace
             [controller = dlssResolutionController](nr::rhi::Device &device, vk::Extent2D displayExtent,
                                                     const nr::options::OptionFrameSnapshot &snapshot) {
                 auto query = nr::renderPasses::DlssRayReconstructionResolutionController::OptimalSettingsQuery{
-                    [&device](nr::rhi::DlssDimensions targetSize, nr::rhi::DlssQuality quality) {
+                    [&device](nr::dependency::dlss::Dimensions targetSize, nr::dependency::dlss::Quality quality) {
                         return device.dlssContext()->optimalSettings(targetSize, quality);
                     }};
                 return controller->resolve(nr::renderPasses::dlssResolutionRequestFromSnapshot(snapshot), displayExtent,

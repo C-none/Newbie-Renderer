@@ -410,21 +410,12 @@ void Renderer::ensureEnvironmentMapFallback()
 {
     nrAssert(static_cast<bool>(device_), "Renderer::makeSampledImageUploadPlan requires initialized device.");
 
-    auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
-
-    auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
-    plan.releaseToDestination =
-        nr::rhi::ops::makeQueueOwnershipTransfer(transferQueueFamily, graphicsQueueFamily,
-                                                 nr::rhi::ops::QueueAccessScope{
-                                                     .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                     .access = vk::AccessFlagBits2::eTransferWrite,
-                                                 },
-                                                 nr::rhi::ops::QueueAccessScope{
-                                                     .stages = vk::PipelineStageFlagBits2::eAllCommands,
-                                                     .access = vk::AccessFlagBits2::eShaderSampledRead,
-                                                 });
-    return plan;
+    auto const queueFamilies = device_->queueManager.familyIndices();
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.graphics,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eAllCommands,
+                                                             .access = vk::AccessFlagBits2::eShaderSampledRead,
+                                                         });
 }
 
 void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTicket &uploadTicket,
@@ -434,36 +425,23 @@ void Renderer::synchronizeSampledImageUpload(const nr::rhi::ops::ImageUploadTick
     nrAssert(uploadTicket.valid(), "{} upload ticket is invalid.", debugName);
 
     auto &uploadContext = device_->uploadReadback();
-    auto const transferQueueFamily = device_->queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device_->queueManager.graphics().queueFamilyIndex();
-    if (transferQueueFamily == graphicsQueueFamily)
+    auto const queueFamilies = device_->queueManager.familyIndices();
+    if (queueFamilies.transfer == queueFamilies.graphics)
     {
         uploadContext.waitUploadComplete(uploadTicket.signalValue);
         uploadContext.reclaimCompletedUploads();
         return;
     }
 
-    auto commandPool = nr::rhi::CommandPool{
-        device_->device,
-        graphicsQueueFamily,
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1);
-    auto &commandBuffer = commandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    uploadContext.recordImageAcquireBarrier(commandBuffer, uploadTicket);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto syncBatch = nr::rhi::CommandBatch{};
-    syncBatch.addWait(uploadContext.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
-                      uploadTicket.signalValue);
-    syncBatch.addCommandBuffer(commandBuffer);
-
-    auto fence = vk::raii::Fence(device_->device, vk::FenceCreateInfo{});
-    device_->queueManager.graphics().submit(std::move(syncBatch), std::cref(fence));
-    auto const waitResult = device_->device.waitForFences(*fence, vk::True, std::numeric_limits<std::uint64_t>::max());
-    nrAssert(waitResult == vk::Result::eSuccess, "Renderer failed waiting for {} upload synchronization.", debugName);
+    nr::rhi::submitOneShot(device_->device, device_->queueManager.graphics(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *uploadContext.uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eAllCommands,
+                               .waitValue = uploadTicket.signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               uploadContext.recordImageAcquireBarrier(commandBuffer, uploadTicket);
+                           });
     uploadContext.reclaimCompletedUploads();
 }
 
@@ -520,8 +498,9 @@ void Renderer::initialize(const RendererCreateInfo &info)
     auto &shaderService = nr::rhi::ShaderService::instance();
     shaderService.configure();
 
-    device_ = std::make_unique<nr::rhi::Device>();
-    device_->initialize(info.appName, info.engineName, info.debugShaderInstrumentationEnabled);
+    device_ = nr::rhi::Device::createUnique(info.appName, info.engineName,
+                                            std::filesystem::path{std::string{nr::psoCacheRoot}},
+                                            info.debugShaderInstrumentationEnabled);
     frameUniformArena_.initialize(*device_, info.frameUniformBytesPerFrame, "Renderer.FrameUniformArena");
     submissionTimelines_.initialize(device_->device, 0);
     ensureSceneTextureFallback();

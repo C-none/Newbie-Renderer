@@ -79,24 +79,21 @@ struct MetallicRoughnessFactorSet
     constexpr auto dielectricSpecular = 0.04f;
     constexpr auto epsilon = 1.0e-6f;
 
+    auto const &specularGlossiness = *material.specularGlossiness;
     auto diffuse = clamp01(DirectX::XMFLOAT3{
-        material.baseColorFactor[0],
-        material.baseColorFactor[1],
-        material.baseColorFactor[2],
+        specularGlossiness.diffuseFactor[0],
+        specularGlossiness.diffuseFactor[1],
+        specularGlossiness.diffuseFactor[2],
     });
-    auto alpha = clamp01(material.baseColorFactor[3] * material.opacity);
+    auto alpha = clamp01(specularGlossiness.diffuseFactor[3] * material.opacity);
 
-    auto specular = DirectX::XMFLOAT3{1.0f, 1.0f, 1.0f};
-    if (material.specularFactor.has_value())
-    {
-        specular = clamp01(DirectX::XMFLOAT3{
-            (*material.specularFactor)[0],
-            (*material.specularFactor)[1],
-            (*material.specularFactor)[2],
-        });
-    }
+    auto specular = clamp01(DirectX::XMFLOAT3{
+        specularGlossiness.specularFactor[0],
+        specularGlossiness.specularFactor[1],
+        specularGlossiness.specularFactor[2],
+    });
 
-    auto const glossiness = clamp01(material.glossinessFactor.value_or(1.0f));
+    auto const glossiness = clamp01(specularGlossiness.glossinessFactor);
     auto const specularStrength = std::max({specular.x, specular.y, specular.z});
     auto const oneMinusSpecularStrength = 1.0f - specularStrength;
     auto const metallic =
@@ -120,11 +117,6 @@ struct MetallicRoughnessFactorSet
         .metallicFactor = metallic,
         .roughnessFactor = clamp01(1.0f - glossiness),
     };
-}
-
-[[nodiscard]] bool hasSpecularGlossinessFactors(const nr::load::MaterialAsset &material) noexcept
-{
-    return material.specularFactor.has_value() || material.glossinessFactor.has_value();
 }
 
 } // namespace nr::scene::detail
@@ -282,6 +274,13 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
                 material.anisotropy.emplace();
             }
             break;
+        case nr::resource::MaterialTextureSlotSemantic::specular:
+        case nr::resource::MaterialTextureSlotSemantic::specularColor:
+            if (!material.specular.has_value())
+            {
+                material.specular.emplace();
+            }
+            break;
         default:
             break;
         }
@@ -343,7 +342,7 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
             .roughnessFactor = sourceMaterial.roughnessFactor,
         };
 
-        if (detail::hasSpecularGlossinessFactors(sourceMaterial))
+        if (sourceMaterial.specularGlossiness.has_value())
         {
             convertedFactors = detail::convertSpecularGlossinessToMetallicRoughness(sourceMaterial);
             reportImport<nr::LogLevel::warning>(
@@ -415,6 +414,17 @@ void Scene::bridgeMaterials(const nr::load::SceneAsset &sceneAsset, const SceneB
                 material.ior.emplace();
             }
             material.ior->ior = ior;
+        });
+        assignIfPresent(sourceMaterial.specular, [&](const nr::load::MaterialSpecularExtensionAsset &specular) {
+            material.specular = nr::resource::MaterialSpecularExtension{
+                .factor = specular.factor,
+                .colorFactor =
+                    DirectX::XMFLOAT3{
+                        specular.colorFactor[0],
+                        specular.colorFactor[1],
+                        specular.colorFactor[2],
+                    },
+            };
         });
         assignIfPresent(sourceMaterial.thicknessFactor, [&](float thicknessFactor) {
             if (!material.volumeBoundary.has_value())

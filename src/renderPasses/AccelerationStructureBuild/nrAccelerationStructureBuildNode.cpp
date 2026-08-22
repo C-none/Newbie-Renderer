@@ -607,7 +607,7 @@ void createBlasAtlas(AccelerationStructureBuildRuntimeCache &runtime, nr::rhi::D
                               ? grownBlasAtlasCapacity(runtime.blasAtlas.capacityBytes, requiredCapacity)
                               : replacementBlasAtlasCapacity(runtime.blasAtlas.capacityBytes, requiredCapacity);
     runtime.blasAtlas.buffer = device.resourceFactory.createBuffer(
-        nr::rhi::makeBufferCreateInfo(std::max<vk::DeviceSize>(capacity, 1u),
+        nr::rhi::makeBufferCreateInfo(capacity,
                                       vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
                                           vk::BufferUsageFlagBits::eShaderDeviceAddress),
         nr::rhi::MemoryUsage::GpuOnly, "ASBuild.BLAS.Atlas");
@@ -665,7 +665,7 @@ void ensureScratchBuffer(nr::rhi::Device &device, FrameSlotAsResources &slot, vk
     }
 
     slot.scratchBuffer = device.resourceFactory.createBuffer(
-        nr::rhi::makeBufferCreateInfo(std::max<vk::DeviceSize>(requiredSize, 1u),
+        nr::rhi::makeBufferCreateInfo(requiredSize,
                                       vk::BufferUsageFlagBits::eStorageBuffer |
                                           vk::BufferUsageFlagBits::eShaderDeviceAddress),
         nr::rhi::MemoryUsage::GpuOnly, "ASBuild.Scratch");
@@ -681,7 +681,7 @@ void ensureInstanceBuffer(nr::rhi::Device &device, FrameSlotAsResources &slot, v
     }
 
     slot.instanceBuffer = device.resourceFactory.createBuffer(
-        nr::rhi::makeBufferCreateInfo(std::max<vk::DeviceSize>(requiredSize, 1u),
+        nr::rhi::makeBufferCreateInfo(requiredSize,
                                       vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |
                                           vk::BufferUsageFlagBits::eShaderDeviceAddress),
         nr::rhi::MemoryUsage::CpuToGpu, "ASBuild.TLAS.Instances");
@@ -691,10 +691,11 @@ void ensureInstanceBuffer(nr::rhi::Device &device, FrameSlotAsResources &slot, v
 
 [[nodiscard]] std::vector<std::uint32_t> rtMetadataQueueFamilyIndices(nr::rhi::Device &device)
 {
+    auto const indices = device.queueManager.familyIndices();
     auto families = std::vector<std::uint32_t>{
-        device.queueManager.transfer().queueFamilyIndex(),
-        device.queueManager.graphics().queueFamilyIndex(),
-        device.queueManager.compute().queueFamilyIndex(),
+        indices.transfer,
+        indices.graphics,
+        indices.compute,
     };
     std::ranges::sort(families);
     auto const duplicates = std::ranges::unique(families);
@@ -818,7 +819,7 @@ void ensureTlas(nr::rhi::Device &device, FrameSlotAsResources &slot, const nr::r
     }
 
     auto newStorage = device.resourceFactory.createBuffer(
-        nr::rhi::makeBufferCreateInfo(std::max<vk::DeviceSize>(sizes.accelerationStructureSize, 1u),
+        nr::rhi::makeBufferCreateInfo(sizes.accelerationStructureSize,
                                       vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
                                           vk::BufferUsageFlagBits::eShaderDeviceAddress),
         nr::rhi::MemoryUsage::GpuOnly, "ASBuild.TLAS.Storage");
@@ -1375,12 +1376,19 @@ void initializeRtMetadataBuildState(RtMetadataBuildState &state)
     };
     auto const tlasSizes = nr::rhi::queryTlasBuildSizes(device.device, prepared.tlasInput, tlasBuildOptions());
     ensureTlas(device, slot, tlasSizes, prepared.tlasInput.instanceCount);
+    auto const scratchAlignment = runtime.limits.minScratchAlignment;
+    nrAssert(scratchAlignment > 0u, "AccelerationStructureBuildNode requires scratch alignment > 0.");
     auto blasScratchBytes = vk::DeviceSize{0u};
     std::ranges::for_each(prepared.dirtyMeshes, [&](nr::resource::MeshHandle mesh) {
-        blasScratchBytes = alignUp(blasScratchBytes, runtime.limits.minScratchAlignment);
-        blasScratchBytes += runtime.blasCache.at(mesh).cachedBuild.sizes.buildScratchSize;
+        blasScratchBytes = nr::checkedAlignUp(blasScratchBytes, scratchAlignment, "AS build BLAS scratch offset");
+        blasScratchBytes = nr::checkedAdd(blasScratchBytes,
+                                          runtime.blasCache.at(mesh).cachedBuild.sizes.buildScratchSize,
+                                          "AS build packed BLAS scratch size");
     });
-    ensureScratchBuffer(device, slot, std::max(blasScratchBytes, tlasSizes.buildScratchSize));
+    auto const requiredScratchBytes = std::max(blasScratchBytes, tlasSizes.buildScratchSize);
+    auto const scratchAllocationBytes =
+        nr::checkedAdd(requiredScratchBytes, scratchAlignment - 1u, "AS build scratch alignment padding");
+    ensureScratchBuffer(device, slot, scratchAllocationBytes);
     prepared.rtAtlasMesh = instances.front().mesh;
     prepared.available = true;
     return prepared;
@@ -1394,6 +1402,10 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
         return;
     }
     auto &slot = runtime.frameSlots[prepared.frameSlot];
+    auto const scratchAlignment = runtime.limits.minScratchAlignment;
+    nrAssert(scratchAlignment > 0u, "AccelerationStructureBuildNode requires scratch alignment > 0.");
+    auto const scratchBaseAddress = nr::checkedAlignUp(slot.scratchBuffer.deviceAddress(), scratchAlignment,
+                                                       "AS build scratch device address");
     auto importedBuffers = std::map<const nr::rhi::Buffer *, GraphResourceHandle>{};
     auto blasResourceByMesh = std::map<nr::resource::MeshHandle, GraphResourceHandle>{};
     auto const ownership = nr::renderer::ownershipDomainFromQueue(context.queue);
@@ -1479,17 +1491,19 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
             auto const &cached = runtime.blasCache.at(mesh).cachedBuild;
             auto const geometryOffset = frameData.geometries.size();
             frameData.geometries.insert(frameData.geometries.end(), cached.geometries.begin(), cached.geometries.end());
-            scratchOffset = alignUp(scratchOffset, runtime.limits.minScratchAlignment);
+            scratchOffset = nr::checkedAlignUp(scratchOffset, scratchAlignment, "AS build BLAS scratch offset");
             frameData.works.push_back(BlasBuildWork{
                 .dst = std::cref(runtime.blasCache.at(mesh).accelerationStructure),
                 .scratchBuffer = std::cref(slot.scratchBuffer),
                 .geometryOffset = geometryOffset,
                 .geometryCount = cached.geometries.size(),
-                .scratchAddress = slot.scratchBuffer.deviceAddress() + scratchOffset,
+                .scratchAddress =
+                    nr::checkedAdd(scratchBaseAddress, scratchOffset, "AS build BLAS scratch address"),
                 .scratchSize = cached.sizes.buildScratchSize,
                 .options = staticBlasBuildOptions(),
             });
-            scratchOffset += cached.sizes.buildScratchSize;
+            scratchOffset = nr::checkedAdd(scratchOffset, cached.sizes.buildScratchSize,
+                                           "AS build packed BLAS scratch size");
             auto const blas = importBlas(mesh);
             dirtyBlasResources.emplace(mesh, blas);
             uses.push_back(nr::renderer::use::accelerationStructureBuildWrite(blas));
@@ -1538,10 +1552,10 @@ void declarePreparedAsFrame(nr::renderer::NodeBuildContext &context, Acceleratio
                                                               .dst = std::cref(slot.tlas),
                                                               .instanceBuffer = std::cref(slot.instanceBuffer),
                                                               .scratchBuffer = std::cref(slot.scratchBuffer),
-                                                              .scratchAddress = slot.scratchBuffer.deviceAddress(),
+                                                              .scratchAddress = scratchBaseAddress,
                                                               .buildInput = prepared.tlasInput,
                                                               .options = tlasBuildOptions(),
-                                                              .scratchAlignment = runtime.limits.minScratchAlignment,
+                                                              .scratchAlignment = scratchAlignment,
                                                           });
     auto const tlasFrameDataUses = std::array{tlasFrameData};
     static_cast<void>(context.addPass(tlasUses, "ASBuild.BuildTLAS",

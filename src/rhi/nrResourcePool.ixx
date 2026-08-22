@@ -37,16 +37,16 @@ export namespace nr::rhi
 class ResourceFactory
 {
   public:
-    ResourceFactory() = default;
+    ResourceFactory(const MemoryAllocator &allocator, const vk::raii::Device &device);
 
     ResourceFactory(const ResourceFactory &) = delete;
     ResourceFactory &operator=(const ResourceFactory &) = delete;
     ResourceFactory(ResourceFactory &&) noexcept = default;
     ResourceFactory &operator=(ResourceFactory &&) noexcept = default;
 
-    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device);
+    [[nodiscard]] const MemoryAllocator &allocator() const noexcept;
 
-    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] const vk::raii::Device &device() const noexcept;
 
     [[nodiscard]] Buffer createBuffer(const vk::BufferCreateInfo &createInfo,
                                       MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
@@ -55,8 +55,8 @@ class ResourceFactory
                                     MemoryUsage memoryUsage = MemoryUsage::GpuOnly, std::string_view name = "") const;
 
   private:
-    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_{};
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+    std::reference_wrapper<const MemoryAllocator> allocator_;
+    std::reference_wrapper<const vk::raii::Device> device_;
 };
 
 // =========================================================================
@@ -67,31 +67,25 @@ class ResourceFactory
  * @brief High-level resource pool with per-frame scratch allocations
  *
  * Lifecycle:
- * - Initialized by Device::initialize() after MemoryAllocator and vk::raii::Device creation
+ * - Constructed by Device after MemoryAllocator and vk::raii::Device creation
  * - resetFrame() called each frame after fence signal
  * - Must be destroyed before MemoryAllocator and Device
  */
 class ResourcePool
 {
   public:
-    ResourcePool() = default;
+    /**
+     * @brief Construct the resource pool
+     *
+     * @param factory  Resource factory borrowing the allocator and device (must outlive this pool)
+     */
+    explicit ResourcePool(const ResourceFactory &factory);
 
     // Move-only
     ResourcePool(const ResourcePool &) = delete;
     ResourcePool &operator=(const ResourcePool &) = delete;
     ResourcePool(ResourcePool &&) noexcept = default;
     ResourcePool &operator=(ResourcePool &&) noexcept = default;
-
-    /**
-     * @brief Initialize the resource pool
-     *
-     * @param allocator  Initialized MemoryAllocator (must outlive this pool)
-     * @param device     RAII device (must outlive this pool)
-     */
-    void initialize(const MemoryAllocator &allocator, const vk::raii::Device &device);
-
-    /// Check if initialized
-    [[nodiscard]] bool valid() const noexcept;
 
     /**
      * @brief Allocate a per-frame transient buffer
@@ -143,8 +137,7 @@ class ResourcePool
     // Members
     // -----------------------------------------------------------------
 
-    std::optional<std::reference_wrapper<const MemoryAllocator>> allocator_{};
-    std::optional<std::reference_wrapper<const vk::raii::Device>> device_{};
+    std::reference_wrapper<const ResourceFactory> factory_;
 
     // Per-frame transient resources (bulk-reset each frame)
     std::array<std::deque<Buffer>, maxFrameInFlight> frameBuffers_;

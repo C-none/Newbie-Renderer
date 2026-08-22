@@ -40,10 +40,10 @@ class Device
     std::string appName;
     std::string engineName;
     vk::raii::Context context;
-    vk::raii::Instance instance = {nullptr};
-    vk::raii::DebugUtilsMessengerEXT debugUtilsMessenger = {nullptr};
-    vk::raii::PhysicalDevice physicalDevice = {nullptr};
-    vk::raii::Device device = {nullptr};
+    vk::raii::Instance instance;
+    vk::raii::DebugUtilsMessengerEXT debugUtilsMessenger;
+    vk::raii::PhysicalDevice physicalDevice;
+    vk::raii::Device device;
 
     MemoryAllocator memoryAllocator;
     ResourceFactory resourceFactory;
@@ -54,28 +54,25 @@ class Device
 
     PresentationContext presentationContext;
     PipelineService pipelineService;
-    std::optional<ops::UploadReadbackContext> uploadReadbackContext_{};
+    std::optional<ops::UploadReadbackContext> uploadReadbackContext_;
 
-    Device() = default;
+    [[nodiscard]] static Device create(std::string appName = "DefaultApp", std::string engineName = "DefaultEngine",
+                                       std::filesystem::path pipelineBinaryRoot =
+                                           std::filesystem::path{std::string{nr::psoCacheRoot}},
+                                       bool debugShaderInstrumentationEnabled = true);
+
+    /// Heap-allocating counterpart of create(), for owners that need a stable address.
+    [[nodiscard]] static std::unique_ptr<Device> createUnique(
+        std::string appName = "DefaultApp", std::string engineName = "DefaultEngine",
+        std::filesystem::path pipelineBinaryRoot = std::filesystem::path{std::string{nr::psoCacheRoot}},
+        bool debugShaderInstrumentationEnabled = true);
+
     Device(Device &) = delete;
     Device &operator=(Device &) = delete;
 
     [[nodiscard]] const RayTracingCapabilitySnapshot &rayTracingCapabilities() const noexcept;
 
     [[nodiscard]] const CooperativeVectorCapabilitySnapshot &cooperativeVectorCapabilities() const noexcept;
-
-    // Query opaque TrainingOptimal sizes during resource initialization and retain the result for every conversion.
-    [[nodiscard]] CooperativeVectorMatrixLayoutSize cooperativeVectorMatrixLayoutSize(
-        CooperativeVectorMatrixDesc desc) const;
-
-    // The source and destination regions must describe exactly one matrix using the cached layout sizes above.
-    void recordCooperativeVectorMatrixConversion(const vk::raii::CommandBuffer &commandBuffer,
-                                                  CooperativeVectorMatrixMemory source,
-                                                  CooperativeVectorMatrixDesc sourceDesc,
-                                                  CooperativeVectorMatrixLayoutSize sourceLayoutSize,
-                                                  CooperativeVectorMatrixMemory destination,
-                                                  CooperativeVectorMatrixDesc destinationDesc,
-                                                  CooperativeVectorMatrixLayoutSize destinationLayoutSize) const;
 
     [[nodiscard]] const ops::QueueFamilyTransferPolicy &queueFamilyTransferPolicy() const noexcept;
 
@@ -94,12 +91,6 @@ class Device
 
     [[nodiscard]] bool hasEnabledDeviceExtension(std::string_view extension) const;
 
-    void initialize(std::string const &_appName = {"DefaultApp"}, std::string const &_engineName = {"DefaultEngine"},
-                    bool debugShaderInstrumentationEnabled = true);
-
-    void initialize(std::string const &_appName, std::string const &_engineName,
-                    std::filesystem::path pipelineBinaryRoot, bool debugShaderInstrumentationEnabled = true);
-
     [[nodiscard]] FrameBeginResult beginFrame();
 
     [[nodiscard]] FrameAcquireResult acquireFrameImage(
@@ -112,13 +103,6 @@ class Device
                           bool signalForPresent = false);
 
     [[nodiscard]] PresentResult presentFrame();
-
-    vk::raii::Instance makeInstance(std::uint32_t apiVersion = vk::ApiVersion14,
-                                    bool debugShaderInstrumentationEnabled = true) const;
-
-    vk::raii::Device makeDevice();
-
-    void initializeCommandSystem();
 
     void waitIdle();
 
@@ -139,7 +123,7 @@ class Device
     [[nodiscard]] std::shared_ptr<DlssContext> dlssContext();
 
     [[nodiscard]] std::unique_ptr<DlssRayReconstructionFeature> createDlssRayReconstructionFeature(
-        const DlssRayReconstructionCreateDesc &desc);
+        const nr::dependency::dlss::RayReconstructionCreateDesc &desc);
 
     ~Device();
 
@@ -148,44 +132,33 @@ class Device
 
     [[nodiscard]] VkImage activeSwapchainImageRawForExternalTools() const;
 
-    void setupInitialFlags();
-
-    [[nodiscard]] std::uint32_t requiredQueueFamily(QueueFamilyKind kind) const;
-
-    [[nodiscard]] std::uint32_t presentQueueFamilyIndex() const;
-
-    std::vector<std::string> instanceEnabledLayers{};
-    std::vector<std::string> instanceEnabledExtensions{};
-    std::vector<std::string> requestedDeviceExtensions_{
-        vk::KHRSwapchainExtensionName,
-        vk::EXTSwapchainMaintenance1ExtensionName,
-        vk::KHRDeferredHostOperationsExtensionName,
-        vk::KHRAccelerationStructureExtensionName,
-        vk::KHRRayTracingPipelineExtensionName,
-        vk::EXTRayTracingInvocationReorderExtensionName,
-        vk::KHRPipelineLibraryExtensionName,
-        vk::KHRPipelineBinaryExtensionName,
-        vk::EXTMemoryBudgetExtensionName,
-        vk::KHRMaintenance8ExtensionName,
-        vk::KHRMaintenance9ExtensionName,
-        vk::EXTFullScreenExclusiveExtensionName,
-        vk::NVCooperativeVectorExtensionName,
-        vk::EXTShaderReplicatedCompositesExtensionName,
-    };
-    std::vector<std::string> enabledDeviceExtensions_{};
-    RayTracingCapabilitySnapshot rtCapabilities_{};
-    CooperativeVectorCapabilitySnapshot cooperativeVectorCapabilities_{};
-    ops::QueueFamilyTransferPolicy queueFamilyTransferPolicy_{};
-    bool frameBoundaryEnabled_ = false;
-    bool hdrMetadataEnabled_ = false;
-    NsightGraphicsFrameHelper nsightGraphics_{};
+    // Declaration order matches construction order: the state below the Vulkan handles is
+    // produced while building them, and members unwind in exact reverse at destruction.
+    std::vector<std::string> instanceEnabledLayers;
+    std::vector<std::string> instanceEnabledExtensions;
+    std::vector<std::string> requestedDeviceExtensions_;
+    std::vector<std::string> enabledDeviceExtensions_;
+    RayTracingCapabilitySnapshot rtCapabilities_;
+    CooperativeVectorCapabilitySnapshot cooperativeVectorCapabilities_;
+    ops::QueueFamilyTransferPolicy queueFamilyTransferPolicy_;
+    bool frameBoundaryEnabled_;
+    bool hdrMetadataEnabled_;
+    NsightGraphicsFrameHelper nsightGraphics_;
     std::shared_ptr<DlssContext> dlssContext_{};
 
-    std::array<std::size_t, static_cast<std::size_t>(QueueFamilyKind::size)> queueFamilyDict{};
-    SwapChainConfig swapChainConfig_{};
+    std::array<std::size_t, static_cast<std::size_t>(QueueFamilyKind::size)> queueFamilyDict;
+    SwapChainConfig swapChainConfig_;
     std::optional<std::uint64_t> presentFrameBoundaryFrameID_{};
     bool frameAcquireRequiresRecreate_ = false;
     std::uint64_t swapchainRecreationGeneration_ = 0;
+
+  private:
+    struct Bootstrap;
+
+    [[nodiscard]] static Bootstrap makeBootstrap(std::string appName, std::string engineName,
+                                                 bool debugShaderInstrumentationEnabled);
+
+    Device(Bootstrap &&bootstrap, std::filesystem::path pipelineBinaryRoot);
 };
 
 } // namespace nr::rhi

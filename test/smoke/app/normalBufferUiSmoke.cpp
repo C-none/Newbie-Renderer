@@ -115,7 +115,7 @@ namespace
         return std::nullopt;
     }
 
-    presentation.pollEvents();
+    presentation.windowInput().pollEvents();
     app.ui().beginFrame(presentation, deltaSeconds);
     app.ui().setCameraFrame(app.camera().frame());
     static_cast<void>(app.ui().finalizeFrame());

@@ -8,6 +8,7 @@ vcpkg_from_github(
         build_fixes.patch
         ext_mesh_gpu_instancing.patch
         khr_texture_transform_texcoord.patch
+        khr_materials_specular.patch
 )
 
 file(REMOVE "${SOURCE_PATH}/cmake-modules/FindZLIB.cmake")

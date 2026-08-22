@@ -36,15 +36,19 @@ namespace nr::scene::detail
     case nr::resource::MaterialTextureSlotSemantic::baseColor:
     case nr::resource::MaterialTextureSlotSemantic::emissive:
     case nr::resource::MaterialTextureSlotSemantic::sheenColor:
+    case nr::resource::MaterialTextureSlotSemantic::specularColor:
         return true;
     default:
         return false;
     }
 }
 
-[[nodiscard]] bool semanticIsLinear(nr::resource::MaterialTextureSlotSemantic slot) noexcept
+[[nodiscard]] bool semanticRequiresLinearColorChannels(nr::resource::MaterialTextureSlotSemantic slot) noexcept
 {
-    return nr::resource::materialTextureSlotSemanticValid(slot) && !semanticIsColor(slot);
+    // Vulkan sRGB formats decode RGB only. KHR_materials_specular reads its scalar texture from A,
+    // so sharing one RGBA image with specularColor remains compatible with an sRGB image view.
+    return nr::resource::materialTextureSlotSemanticValid(slot) && !semanticIsColor(slot) &&
+           slot != nr::resource::MaterialTextureSlotSemantic::specular;
 }
 
 [[nodiscard]] std::vector<TextureColorSpaceHint> buildTextureColorSpaceHints(const nr::load::SceneAsset &sceneAsset)
@@ -65,7 +69,7 @@ namespace nr::scene::detail
                 hint.hasColor = true;
             }
 
-            if (semanticIsLinear(binding.semantic))
+            if (semanticRequiresLinearColorChannels(binding.semantic))
             {
                 hint.hasLinear = true;
             }

@@ -231,42 +231,25 @@ template <typename T>
 
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTextureUploadPlan(const nr::rhi::Device &device)
 {
-    auto const transferFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsFamily = device.queueManager.graphics().queueFamilyIndex();
-    return nr::rhi::ops::BufferUploadOwnershipPlan{
-        .releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-            transferFamily, graphicsFamily,
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eTransfer,
-                .access = vk::AccessFlagBits2::eTransferWrite,
-            },
-            nr::rhi::ops::QueueAccessScope{
-                .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                .access = vk::AccessFlagBits2::eShaderSampledRead,
-            }),
-    };
+    auto const queueFamilies = device.queueManager.familyIndices();
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.graphics,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+                                                             .access = vk::AccessFlagBits2::eShaderSampledRead,
+                                                         });
 }
 
 void acquireTextureOnGraphics(nr::rhi::Device &device, const nr::rhi::ops::ImageUploadTicket &ticket)
 {
-    auto commandPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.graphics().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1u);
-    auto const &commandBuffer = commandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    device.uploadReadback().recordImageAcquireBarrier(commandBuffer, ticket);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addWait(device.uploadReadback().uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                  ticket.signalValue);
-    batch.addCommandBuffer(commandBuffer);
-    device.queueManager.graphics().submit(std::move(batch));
-    device.queueManager.graphics().waitIdle();
+    nr::rhi::submitOneShot(device.device, device.queueManager.graphics(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *device.uploadReadback().uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+                               .waitValue = ticket.signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               device.uploadReadback().recordImageAcquireBarrier(commandBuffer, ticket);
+                           });
 }
 
 [[nodiscard]] nr::rhi::Image createWhiteTexture(nr::rhi::Device &device)
@@ -549,8 +532,7 @@ void addAsBuildBarrier(nr::rhi::ops::BarrierBatch &barriers, vk::PipelineStageFl
 
 const nr::test::CaseRegistrar shadowRayTypeGpuContractCase{
     "path tracing shadow ray type routes compact payload through production miss and any-hit shaders", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_path_tracing_shadow_ray_gpu_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_path_tracing_shadow_ray_gpu_contract_test", "NewbieRenderer");
 
         auto const vertices = makeVertices();
         auto const indices = makeIndices();
@@ -731,9 +713,9 @@ const nr::test::CaseRegistrar shadowRayTypeGpuContractCase{
             device.queueManager.graphics().queueFamilyIndex(),
             vk::CommandPoolCreateFlagBits::eTransient,
         };
-        auto commandBuffers = commandPool.allocatePrimary(1u);
+        auto commandBuffers = commandPool.allocate<vk::CommandBufferLevel::ePrimary>(1u);
         auto const &commandBuffer = commandBuffers.front();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         nr::rhi::recordBuildBlasGeometries(
             commandBuffer,
             nr::rhi::BlasGeometriesBuildRecordInfo{
@@ -776,7 +758,7 @@ const nr::test::CaseRegistrar shadowRayTypeGpuContractCase{
                                },
                                .recordingQueueRole = nr::rhi::QueueRole::Graphics,
                            });
-        nr::rhi::CommandRecorder::end(commandBuffer);
+        commandBuffer.end();
 
         auto batch = nr::rhi::CommandBatch{};
         batch.addCommandBuffer(commandBuffer);
@@ -811,8 +793,7 @@ const nr::test::CaseRegistrar shadowRayTypeGpuContractCase{
 
 const nr::test::CaseRegistrar invalidMetadataGpuContractCase{
     "path tracing any-hit accepts invalid metadata before valid transparent geometry", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_path_tracing_shadow_ray_gpu_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_path_tracing_shadow_ray_gpu_contract_test", "NewbieRenderer");
 
         auto const vertices = makeInvalidMetadataVertices();
         auto const indices = makeInvalidMetadataIndices();
@@ -993,9 +974,9 @@ const nr::test::CaseRegistrar invalidMetadataGpuContractCase{
             device.queueManager.graphics().queueFamilyIndex(),
             vk::CommandPoolCreateFlagBits::eTransient,
         };
-        auto commandBuffers = commandPool.allocatePrimary(1u);
+        auto commandBuffers = commandPool.allocate<vk::CommandBufferLevel::ePrimary>(1u);
         auto const &commandBuffer = commandBuffers.front();
-        nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         nr::rhi::recordBuildBlasGeometries(
             commandBuffer,
             nr::rhi::BlasGeometriesBuildRecordInfo{
@@ -1038,7 +1019,7 @@ const nr::test::CaseRegistrar invalidMetadataGpuContractCase{
                                },
                                .recordingQueueRole = nr::rhi::QueueRole::Graphics,
                            });
-        nr::rhi::CommandRecorder::end(commandBuffer);
+        commandBuffer.end();
 
         auto batch = nr::rhi::CommandBatch{};
         batch.addCommandBuffer(commandBuffer);

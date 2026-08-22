@@ -6,6 +6,7 @@ import dependency.vulkan;
 import :swapchain;
 import :surface;
 import :queue;
+import :type;
 import nr.utils;
 import std;
 
@@ -33,6 +34,20 @@ template <vk::Result Expected> [[nodiscard]] bool isVulkanResult(const vk::Syste
         return vk::Result::eErrorFullScreenExclusiveModeLostEXT;
     }
     return std::nullopt;
+}
+
+template <typename Result>
+[[nodiscard]] Result swapchainFailureResult(const vk::SystemError &error, std::string_view operation)
+{
+    auto recreateResult = swapchainRecreateResultFrom(error);
+    if (!recreateResult.has_value())
+    {
+        nrAssert(false, "SwapChain::{} failed: {}", operation, error.what());
+        return Result{.result = vk::Result::eErrorOutOfDateKHR};
+    }
+    nrLog<LogLevel::warning>("SwapChain::{} returned {}: {}", operation, vk::to_string(*recreateResult),
+                             error.what());
+    return Result{.result = *recreateResult};
 }
 
 [[nodiscard]] bool matchesSurfaceFormat(const vk::SurfaceFormatKHR &candidate,
@@ -180,20 +195,6 @@ namespace nr::rhi
     return formats.front();
 }
 
-SwapChain SwapChain::create(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
-                            const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent,
-                            const SwapChainConfig &config)
-{
-    return createImpl(physicalDevice, device, surface, surfaceExtent, config, vk::SwapchainKHR{});
-}
-
-SwapChain SwapChain::recreate(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
-                              const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent,
-                              vk::SwapchainKHR oldSwapchain, const SwapChainConfig &config)
-{
-    return createImpl(physicalDevice, device, surface, surfaceExtent, config, oldSwapchain);
-}
-
 AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore &imageAvailable, std::uint64_t timeout) const
 {
     try
@@ -206,17 +207,7 @@ AcquireResult SwapChain::acquireNextImage(const vk::raii::Semaphore &imageAvaila
     }
     catch (const vk::SystemError &error)
     {
-        auto recreateResult = detail::swapchainRecreateResultFrom(error);
-        if (!recreateResult.has_value())
-        {
-            nrAssert(false, "SwapChain::acquireNextImage failed: {}", error.what());
-            return AcquireResult{.result = vk::Result::eErrorOutOfDateKHR};
-        }
-        nrLog<LogLevel::warning>("SwapChain::acquireNextImage returned {}: {}", vk::to_string(*recreateResult),
-                                 error.what());
-        return AcquireResult{
-            .result = *recreateResult,
-        };
+        return detail::swapchainFailureResult<AcquireResult>(error, "acquireNextImage");
     }
 }
 
@@ -264,14 +255,7 @@ PresentResult SwapChain::present(const vk::raii::Queue &presentQueue, std::uint3
     }
     catch (const vk::SystemError &error)
     {
-        auto recreateResult = detail::swapchainRecreateResultFrom(error);
-        if (!recreateResult.has_value())
-        {
-            nrAssert(false, "SwapChain::present failed: {}", error.what());
-            return PresentResult{.result = vk::Result::eErrorOutOfDateKHR};
-        }
-        nrLog<LogLevel::warning>("SwapChain::present returned {}: {}", vk::to_string(*recreateResult), error.what());
-        return PresentResult{.result = *recreateResult};
+        return detail::swapchainFailureResult<PresentResult>(error, "present");
     }
 }
 
@@ -286,9 +270,9 @@ PresentResult SwapChain::resolvePresentResult(vk::Result queueResult, vk::Result
     };
 }
 
-SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
-                                const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent,
-                                const SwapChainConfig &config, vk::SwapchainKHR oldSwapchain)
+SwapChain SwapChain::create(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
+                            const vk::raii::SurfaceKHR &surface, vk::Extent2D surfaceExtent,
+                            const SwapChainConfig &config, vk::SwapchainKHR oldSwapchain)
 {
     auto formats = physicalDevice.getSurfaceFormatsKHR(surface);
     nrAssert(!formats.empty(), "SwapChain::create requires at least one supported surface format.");
@@ -409,24 +393,10 @@ SwapChain SwapChain::createImpl(const vk::raii::PhysicalDevice &physicalDevice, 
         std::ranges::for_each(imageIndices, [&](std::size_t index) {
             auto imageName = std::format("Swapchain.Image[{}]", index);
             auto viewName = std::format("Swapchain.View[{}]", index);
-
-            auto imageRaw = static_cast<VkImage>(result.swapChainImages[index]);
-            auto viewRaw = static_cast<VkImageView>(*result.imageViews[index]);
-
-            auto imageNameInfo = vk::DebugUtilsObjectNameInfoEXT{};
-            imageNameInfo.objectType = vk::ObjectType::eImage;
-            imageNameInfo.objectHandle = std::bit_cast<std::uint64_t>(imageRaw);
-            imageNameInfo.pObjectName = imageName.c_str();
-
-            auto viewNameInfo = vk::DebugUtilsObjectNameInfoEXT{};
-            viewNameInfo.objectType = vk::ObjectType::eImageView;
-            viewNameInfo.objectHandle = std::bit_cast<std::uint64_t>(viewRaw);
-            viewNameInfo.pObjectName = viewName.c_str();
-
             try
             {
-                device.setDebugUtilsObjectNameEXT(imageNameInfo);
-                device.setDebugUtilsObjectNameEXT(viewNameInfo);
+                nr::rhi::setDebugObjectName<vk::ObjectType::eImage>(device, result.swapChainImages[index], imageName);
+                nr::rhi::setDebugObjectName<vk::ObjectType::eImageView>(device, result.imageViews[index], viewName);
             }
             catch (const vk::SystemError &error)
             {
@@ -544,6 +514,10 @@ void PresentationContext::waitForPendingPresents()
     std::ranges::for_each(imageIndices, [&](std::uint32_t imageIndex) { waitForPendingPresent(imageIndex); });
 }
 
+PresentationContext::PresentationContext(Surface surface) : surface_(std::move(surface))
+{
+}
+
 PresentationContext::~PresentationContext()
 {
     waitForPendingPresents();
@@ -551,33 +525,10 @@ PresentationContext::~PresentationContext()
     generation_.reset();
 }
 
-void PresentationContext::createSurface(const vk::raii::Instance &instance, std::string_view appName)
-{
-    nrAssert(surface_.handle == nullptr && *surface_.surface == nullptr,
-             "PresentationContext::createSurface can only initialize the presentation surface once.");
-    surface_ = Surface::create(instance, appName);
-    glfwSetWindowUserPointer(surface_.handle.get(), this);
-    glfwSetScrollCallback(surface_.handle.get(), [](GLFWwindow *window, double, double yOffset) {
-        auto *presentation = static_cast<PresentationContext *>(glfwGetWindowUserPointer(window));
-        nrAssert(presentation != nullptr, "PresentationContext scroll callback requires a window user pointer.");
-        if (std::isfinite(yOffset))
-        {
-            presentation->verticalScrollOffset_ += yOffset;
-        }
-    });
-    glfwSetCharCallback(surface_.handle.get(), [](GLFWwindow *window, unsigned int codepoint) {
-        auto *presentation = static_cast<PresentationContext *>(glfwGetWindowUserPointer(window));
-        nrAssert(presentation != nullptr, "PresentationContext text input callback requires a window user pointer.");
-        presentation->textInputCodepoints_.push_back(static_cast<std::uint32_t>(codepoint));
-    });
-}
-
 void PresentationContext::initializeSwapchain(const vk::raii::PhysicalDevice &physicalDevice,
                                               const vk::raii::Device &device, const SwapChainConfig &config,
                                               std::uint32_t presentQueueFamily)
 {
-    nrAssert(surface_.handle != nullptr && *surface_.surface != nullptr,
-             "PresentationContext::initializeSwapchain requires createSurface() first.");
     nrAssert(!generation_.has_value(),
              "PresentationContext::initializeSwapchain can only initialize the first swapchain generation once.");
     device_ = std::cref(device);
@@ -593,7 +544,6 @@ void PresentationContext::initializeSwapchain(const vk::raii::PhysicalDevice &ph
 
 const vk::raii::SurfaceKHR &PresentationContext::surfaceHandle() const
 {
-    nrAssert(*surface_.surface != nullptr, "PresentationContext::surfaceHandle requires createSurface() first.");
     return surface_.surface;
 }
 
@@ -750,56 +700,14 @@ vk::ImageView PresentationContext::swapchainImageView(std::uint32_t imageIndex) 
     return *swapChain.imageViews[imageIndex];
 }
 
-void PresentationContext::pollEvents() const
+WindowInput &PresentationContext::windowInput()
 {
-    verticalScrollOffset_ = 0.0;
-    glfwPollEvents();
+    return *surface_.input;
 }
 
-bool PresentationContext::keyDown(int glfwKeyCode) const
+const WindowInput &PresentationContext::windowInput() const
 {
-    if (surface_.handle == nullptr)
-    {
-        return false;
-    }
-
-    auto state = glfwGetKey(surface_.handle.get(), glfwKeyCode);
-    return state != 0;
-}
-
-bool PresentationContext::mouseButtonDown(int glfwMouseButton) const
-{
-    if (surface_.handle == nullptr)
-    {
-        return false;
-    }
-
-    return glfwGetMouseButton(surface_.handle.get(), glfwMouseButton) != 0;
-}
-
-nr::math::Double2 PresentationContext::cursorPosition() const
-{
-    if (surface_.handle == nullptr)
-    {
-        return {};
-    }
-
-    auto x = 0.0;
-    auto y = 0.0;
-    glfwGetCursorPos(surface_.handle.get(), &x, &y);
-    return nr::math::Double2{x, y};
-}
-
-double PresentationContext::consumeVerticalScrollOffset() const noexcept
-{
-    return std::exchange(verticalScrollOffset_, 0.0);
-}
-
-std::vector<std::uint32_t> PresentationContext::consumeTextInputCodepoints() const
-{
-    auto codepoints = std::move(textInputCodepoints_);
-    textInputCodepoints_.clear();
-    return codepoints;
+    return *surface_.input;
 }
 
 bool PresentationContext::windowShouldClose() const
@@ -877,8 +785,7 @@ void PresentationContext::recreate(const vk::raii::PhysicalDevice &physicalDevic
     refreshFullScreenExclusiveMonitor();
     ensureFullScreenExclusiveSupport(physicalDevice);
     auto oldSwapchain = *generation().swapChain.swapChain;
-    auto rebuilt =
-        SwapChain::recreate(physicalDevice, device, surface_.surface, surface_.extent, oldSwapchain, config_);
+    auto rebuilt = SwapChain::create(physicalDevice, device, surface_.surface, surface_.extent, config_, oldSwapchain);
     generation_.reset();
     generation_.emplace(std::move(rebuilt), device);
     rebuildAcquirePool();

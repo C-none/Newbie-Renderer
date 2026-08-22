@@ -1,4 +1,6 @@
 export module nr.rhi:type;
+import dependency.vulkan;
+import nr.utils;
 import std;
 
 /**
@@ -92,4 +94,72 @@ struct RayTracingCapabilitySnapshot
     std::array<std::uint64_t, 3> maxDispatchDimensions = {0u, 0u, 0u};
 };
 
+/**
+ * @brief Shared primitive that assigns a Vulkan debug object name
+ *
+ * No-ops when debug names are disabled, the handle is null, or the name is
+ * empty. Propagates vk::SystemError so callers own the context-specific
+ * diagnostic.
+ */
+template <vk::ObjectType ObjectType, typename Handle>
+void setDebugObjectName(const vk::raii::Device &device, const Handle &handle, std::string_view name)
+{
+    if constexpr (gpuDebugNamesEnabled)
+    {
+        const auto rawHandle = [&handle] {
+            if constexpr (requires { handle.operator*(); })
+            {
+                return *handle;
+            }
+            else
+            {
+                return handle;
+            }
+        }();
+        if (rawHandle == decltype(rawHandle){} || name.empty())
+        {
+            return;
+        }
+
+        auto debugName = std::string{name};
+        vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
+        objectNameInfo.objectType = ObjectType;
+        static_assert(sizeof(rawHandle) == sizeof(std::uint64_t),
+                      "Vulkan handle size must match std::uint64_t for debug naming.");
+        objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
+        objectNameInfo.pObjectName = debugName.c_str();
+        device.setDebugUtilsObjectNameEXT(objectNameInfo);
+    }
+}
+
 } // namespace nr::rhi
+
+export namespace nr::rhi::detail
+{
+
+struct ValidationResult
+{
+    bool isValid = false;
+    std::string message{};
+};
+
+[[nodiscard]] inline ValidationResult validationSuccess()
+{
+    return ValidationResult{
+        .isValid = true,
+    };
+}
+
+[[nodiscard]] inline ValidationResult validationFailure(std::string message)
+{
+    return ValidationResult{
+        .message = std::move(message),
+    };
+}
+
+template <typename... Args> [[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
+{
+    return std::vformat(format, std::make_format_args(args...));
+}
+
+} // namespace nr::rhi::detail

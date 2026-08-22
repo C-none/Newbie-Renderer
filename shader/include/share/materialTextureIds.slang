@@ -14,5 +14,7 @@ public enum MaterialTextureSlot : uint
     sheenRoughness = 9u,
     transmission = 10u,
     anisotropy = 11u,
-    count = 12u,
+    specular = 12u,
+    specularColor = 13u,
+    count = 14u,
 }

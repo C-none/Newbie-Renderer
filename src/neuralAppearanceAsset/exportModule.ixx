@@ -26,7 +26,7 @@ inline constexpr std::string_view v3TrainingProfileText =
     "nr.neural-appearance/v3;topology=E12x32,E32x32,E32x8,F8x6,S8x32,D8x32,H32x32,O32x6;basis=y-up-geometry;"
     "activation=leaky-relu;output=capped-sigmoid-projected-diffuse-specular;parameters=fp16-row-major;"
     "input=base-color:metallic:roughness:shading-normal:anisotropy-tangent:anisotropy-strength;"
-    "training=coopvec-fp16-qat;steps=16384;batch=64;samples=1048576";
+    "normal-sampling=uniform-unit-disk-lift;training=coopvec-fp16-qat;steps=16384;batch=64;samples=1048576";
 
 struct ArtifactLayerDescriptor
 {

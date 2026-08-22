@@ -39,7 +39,7 @@ inline constexpr auto kAdamEpsilon = 1.0e-7f;
 inline constexpr auto kGradientClip = 0.01f;
 inline constexpr auto kTrainingSchemaMagic = 0x4E415433u;
 inline constexpr auto kTrainingCheckpointMagic = 0x4E415443u;
-inline constexpr auto kTrainingCheckpointVersion = 3u;
+inline constexpr auto kTrainingCheckpointVersion = 5u;
 
 inline constexpr auto kParameterBufferBytes =
     static_cast<vk::DeviceSize>(kParameterChunkCount) * sizeof(std::array<float, 4u>);
@@ -53,6 +53,18 @@ inline constexpr auto kTrainingStatusBufferBytes = 2u * sizeof(std::array<float,
 inline constexpr auto kTrainingControlBufferBytes = sizeof(std::array<std::uint32_t, 4u>);
 inline constexpr auto kHeldOutQualitySampleBufferBytes =
     static_cast<vk::DeviceSize>(kHeldOutQualitySampleCount) * sizeof(std::array<float, 4u>);
+inline constexpr auto kTrainingReadbackSyncPlan = nr::rhi::ops::ReadbackSyncPlan{
+    .preCopy =
+        {
+            .stages = vk::PipelineStageFlagBits2::eComputeShader,
+            .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        },
+    .postCopy =
+        {
+            .stages = vk::PipelineStageFlagBits2::eComputeShader,
+            .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        },
+};
 
 static_assert(kParameterBufferBytes == 14352u);
 static_assert(kInferenceParameterBufferBytes == 7360u);
@@ -262,8 +274,9 @@ void reportCheckpointWarning(const std::filesystem::path &path, std::string_view
 
 [[nodiscard]] bool trainingCheckpointHeaderValid(const NeuralAppearanceTrainingCheckpointHeader &header) noexcept
 {
-    // Version 3 checkpoints are emitted only after the GPU completes at least one training step. Step zero still
-    // requires the initialization pass and therefore cannot be restored as a post-initialization snapshot.
+    // Version 5 rejects checkpoints from the former direction distribution so a resumed run cannot mix rejection
+    // sampling with the uniform-thetaH conditional-CDF profile. Step zero still requires initialization and cannot
+    // be restored as a post-initialization snapshot.
     return header.magic == kTrainingCheckpointMagic && header.version == kTrainingCheckpointVersion &&
            header.parameterChunkCount == kParameterChunkCount &&
            header.modelMomentChunkCount == 2u * kParameterChunkCount && header.statusChunkCount == 2u &&
@@ -488,20 +501,13 @@ inline constexpr auto kRowMajorGradientOffsets =
 
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeTrainingCheckpointUploadPlan(const nr::rhi::Device &device)
 {
-    auto const transferQueueFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const computeQueueFamily = device.queueManager.compute().queueFamilyIndex();
-    auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
-    plan.releaseToDestination = nr::rhi::ops::makeQueueOwnershipTransfer(
-        transferQueueFamily, computeQueueFamily,
-        nr::rhi::ops::QueueAccessScope{
-            .stages = vk::PipelineStageFlagBits2::eTransfer,
-            .access = vk::AccessFlagBits2::eTransferWrite,
-        },
-        nr::rhi::ops::QueueAccessScope{
-            .stages = vk::PipelineStageFlagBits2::eComputeShader,
-            .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-        });
-    return plan;
+    auto const queueFamilies = device.queueManager.familyIndices();
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.compute,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eComputeShader,
+                                                             .access = vk::AccessFlagBits2::eShaderStorageRead |
+                                                                       vk::AccessFlagBits2::eShaderStorageWrite,
+                                                         });
 }
 
 void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
@@ -513,25 +519,21 @@ void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
         "NeuralAppearance checkpoint restore requires valid upload tickets.");
 
     auto &uploadReadback = device.uploadReadback();
-    auto commandPool = nr::rhi::CommandPool{device.device, device.queueManager.compute().queueFamilyIndex(),
-                                            vk::CommandPoolCreateFlagBits::eTransient};
-    auto commandBuffers = commandPool.allocatePrimary(1u);
-    auto &commandBuffer = commandBuffers.front();
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    std::ranges::for_each(tickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
-        uploadReadback.recordAcquireBarrier(commandBuffer, ticket);
-    });
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
     auto signalValue = std::uint64_t{0u};
     std::ranges::for_each(tickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
         signalValue = std::max(signalValue, ticket.signalValue);
     });
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addWait(uploadReadback.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eComputeShader, signalValue);
-    batch.addCommandBuffer(commandBuffer);
-    device.queueManager.compute().submit(std::move(batch));
-    device.queueManager.compute().waitIdle();
+    nr::rhi::submitOneShot(device.device, device.queueManager.compute(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *uploadReadback.uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eComputeShader,
+                               .waitValue = signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               std::ranges::for_each(tickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
+                                   uploadReadback.recordAcquireBarrier(commandBuffer, ticket);
+                               });
+                           });
     uploadReadback.reclaimCompletedUploads();
 }
 
@@ -577,11 +579,12 @@ void synchronizeTrainingCheckpointUploads(nr::rhi::Device &device,
     runtime->rowMajorGradientDescs = neuralAppearanceCooperativeRowMajorGradientDescs();
     std::ranges::for_each(std::views::iota(std::size_t{0u}, runtime->cooperativeGradientDescs.size()),
                           [&](std::size_t index) {
-                              auto const size = device.cooperativeVectorMatrixLayoutSize(
-                                  runtime->cooperativeGradientDescs[index]);
+                              auto const size = nr::rhi::queryCooperativeVectorMatrixLayoutSize(
+                                  device.device, runtime->cooperativeGradientDescs[index]);
                               runtime->cooperativeGradientLayoutSizes[index] = size;
-                              runtime->rowMajorGradientLayoutSizes[index] = device.cooperativeVectorMatrixLayoutSize(
-                                  runtime->rowMajorGradientDescs[index]);
+                              runtime->rowMajorGradientLayoutSizes[index] =
+                                  nr::rhi::queryCooperativeVectorMatrixLayoutSize(
+                                      device.device, runtime->rowMajorGradientDescs[index]);
                               runtime->cooperativeGradientOffsets[index] = alignUp(
                                   runtime->optimalWeightGradientBytes,
                                   nr::rhi::kCooperativeVectorMatrixDeviceAddressAlignment);
@@ -1133,11 +1136,11 @@ void NeuralAppearanceNode::build(NodeBuildContext &context, const NodeFrameParam
                 {
                     return;
                 }
-                nr::nrAssert(recordContext.commandBuffer.has_value() && recordContext.device.has_value(),
-                             "NeuralAppearance cooperative-vector conversion requires command buffer and device.");
+                nr::nrAssert(recordContext.commandBuffer.has_value(),
+                             "NeuralAppearance cooperative-vector conversion requires a command buffer.");
                 std::ranges::for_each(
                     std::views::iota(std::size_t{0u}, runtime->rowMajorGradientDescs.size()), [&](std::size_t index) {
-                        recordContext.device->get().recordCooperativeVectorMatrixConversion(
+                        nr::rhi::recordCooperativeVectorMatrixConversion(
                             recordContext.commandBuffer->get(),
                             nr::rhi::CooperativeVectorMatrixMemory{
                                 .deviceAddress = runtime->optimalWeightGradients.deviceAddress() +
@@ -1289,27 +1292,15 @@ std::optional<std::uint32_t> NeuralAppearanceNode::saveTrainingCheckpoint(nr::rh
     }
 
     device.waitIdle();
-    auto const readbackSyncPlan = nr::rhi::ops::ReadbackSyncPlan{
-        .preCopy =
-            {
-                .stages = vk::PipelineStageFlagBits2::eComputeShader,
-                .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-            },
-        .postCopy =
-            {
-                .stages = vk::PipelineStageFlagBits2::eComputeShader,
-                .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-            },
-    };
     auto &readback = device.uploadReadback();
     auto modelParameterTicket = readback.readbackBuffer(runtime_->modelParameters, 0u, detail::kParameterBufferBytes,
-                                                        nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                        nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto modelMomentTicket = readback.readbackBuffer(runtime_->modelMoments, 0u, detail::kModelMomentBufferBytes,
-                                                     nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                     nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto statusTicket = readback.readbackBuffer(runtime_->trainingStatus, 0u, detail::kTrainingStatusBufferBytes,
-                                                nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto controlTicket = readback.readbackBuffer(runtime_->trainingControl, 0u, detail::kTrainingControlBufferBytes,
-                                                 nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                 nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
 
     auto checkpoint = detail::NeuralAppearanceTrainingCheckpoint{};
     checkpoint.modelParameters = readback.readbackBytes(modelParameterTicket);
@@ -1344,11 +1335,9 @@ std::optional<std::uint32_t> NeuralAppearanceNode::saveTrainingCheckpoint(nr::rh
     auto const slotPaths = detail::trainingCheckpointSlotPaths(path);
     auto slot0 = detail::readTrainingCheckpointSlot(slotPaths[0], false);
     auto slot1 = detail::readTrainingCheckpointSlot(slotPaths[1], false);
-    auto const targetSlot = !slot0.has_value()   ? std::size_t{0u}
-                            : !slot1.has_value() ? std::size_t{1u}
-                            : slot0->header.completedTrainingStep <= slot1->header.completedTrainingStep
-                                ? std::size_t{0u}
-                                : std::size_t{1u};
+    auto const slot0IsNewer =
+        slot0 && (!slot1 || slot0->header.completedTrainingStep > slot1->header.completedTrainingStep);
+    auto const targetSlot = slot0IsNewer ? std::size_t{1u} : std::size_t{0u};
     if (!detail::writeTrainingCheckpointSlot(slotPaths[targetSlot], checkpoint))
     {
         return std::nullopt;
@@ -1370,21 +1359,11 @@ bool NeuralAppearanceNode::loadTrainingCheckpoint(nr::rhi::Device &device, const
         auto const slotPaths = detail::trainingCheckpointSlotPaths(path);
         auto slot0 = detail::readTrainingCheckpointSlot(slotPaths[0], true);
         auto slot1 = detail::readTrainingCheckpointSlot(slotPaths[1], true);
-        if (slot0.has_value() && slot1.has_value())
-        {
-            checkpoint = slot0->header.completedTrainingStep >= slot1->header.completedTrainingStep ? std::move(slot0)
-                                                                                                    : std::move(slot1);
-        }
-        else if (slot0.has_value())
-        {
-            checkpoint = std::move(slot0);
-        }
-        else if (slot1.has_value())
-        {
-            checkpoint = std::move(slot1);
-        }
+        auto const slot1IsNewer =
+            slot1 && (!slot0 || slot1->header.completedTrainingStep > slot0->header.completedTrainingStep);
+        checkpoint = slot1IsNewer ? std::move(slot1) : std::move(slot0);
     }
-    if (!checkpoint.has_value())
+    if (!checkpoint)
     {
         detail::reportCheckpointWarning(path, "no valid checkpoint slot was found");
         return false;
@@ -1462,28 +1441,16 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
     }
 
     device.waitIdle();
-    auto const readbackSyncPlan = nr::rhi::ops::ReadbackSyncPlan{
-        .preCopy =
-            {
-                .stages = vk::PipelineStageFlagBits2::eComputeShader,
-                .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-            },
-        .postCopy =
-            {
-                .stages = vk::PipelineStageFlagBits2::eComputeShader,
-                .access = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-            },
-    };
     auto &readback = device.uploadReadback();
     auto modelTicket = readback.readbackBuffer(runtime_->inferenceParameters, 0u, detail::kInferenceParameterBufferBytes,
-                                               nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                               nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto statusTicket = readback.readbackBuffer(runtime_->trainingStatus, 0u, detail::kTrainingStatusBufferBytes,
-                                                nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto controlTicket = readback.readbackBuffer(runtime_->trainingControl, 0u, detail::kTrainingControlBufferBytes,
-                                                 nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                 nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto qualityTicket = readback.readbackBuffer(runtime_->heldOutQualitySamples, 0u,
                                                  detail::kHeldOutQualitySampleBufferBytes,
-                                                 nr::rhi::QueueRole::Compute, readbackSyncPlan);
+                                                 nr::rhi::QueueRole::Compute, detail::kTrainingReadbackSyncPlan);
     auto modelBytes = readback.readbackBytes(modelTicket);
     auto statusBytes = readback.readbackBytes(statusTicket);
     auto controlBytes = readback.readbackBytes(controlTicket);
@@ -1514,7 +1481,7 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
     }
 
     auto const qualityReport = detail::makeHeldOutQualityReport(qualityBytes, status);
-    if (!qualityReport.has_value())
+    if (!qualityReport)
     {
         nr::nrLog<nr::LogLevel::warning, "NEURAL-ARTIFACT">(
             "NeuralAppearance refused artifact '{}' because held-out quality telemetry is malformed.",
@@ -1538,7 +1505,7 @@ bool NeuralAppearanceNode::saveTrainingArtifact(nr::rhi::Device &device, const s
         .batchSize = detail::kTrainingBatchSize,
         .sampleCount = static_cast<std::uint64_t>(detail::kTrainingBatchSize) * detail::kTotalTrainingStepCount,
     });
-    if (!write.has_value())
+    if (!write)
     {
         nr::nrLog<nr::LogLevel::warning, "NEURAL-ARTIFACT">(
             "NeuralAppearance failed to publish V3 artifact '{}': {}", path.generic_string(), write.error());

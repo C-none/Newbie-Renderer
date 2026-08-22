@@ -73,8 +73,7 @@ int main(int argc, char **argv)
 {
     nr::nrAssert(argc == 2, "nr_rhi_acceleration_structure_geometry_failure_probe requires one scenario argument.");
     auto const scenario = std::string_view{argv[1]};
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_rhi_acceleration_structure_geometry_failure_probe", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_rhi_acceleration_structure_geometry_failure_probe", "NewbieRenderer");
 
     auto vertices = createGeometryBuffer(device, 6u * vertexStride, "as_range_failure_vertices");
     auto indices = createGeometryBuffer(device, 3u * sizeof(std::uint32_t), "as_range_failure_indices");

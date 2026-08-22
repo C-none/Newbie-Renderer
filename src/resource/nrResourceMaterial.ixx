@@ -87,6 +87,8 @@ enum class MaterialTextureSlotSemantic : std::uint8_t
     sheenRoughness,
     transmission,
     anisotropy,
+    specular,
+    specularColor,
     unsupported,
 };
 
@@ -178,6 +180,13 @@ struct MaterialIorExtension
 
 };
 
+struct MaterialSpecularExtension
+{
+    float factor = 1.0f;
+    DirectX::XMFLOAT3 colorFactor{1.0f, 1.0f, 1.0f};
+
+};
+
 struct MaterialVolumeBoundaryExtension
 {
     float thicknessFactor = 0.0f;
@@ -199,6 +208,7 @@ struct Material
     std::optional<MaterialSheenExtension> sheen{};
     std::optional<MaterialTransmissionExtension> transmission{};
     std::optional<MaterialIorExtension> ior{};
+    std::optional<MaterialSpecularExtension> specular{};
     std::optional<MaterialVolumeBoundaryExtension> volumeBoundary{};
     std::optional<MaterialAnisotropyExtension> anisotropy{};
     bool unlit = false;

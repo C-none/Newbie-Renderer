@@ -45,6 +45,87 @@ std::atomic<std::uint64_t> nextRayTracingPipelineIdentity{1u};
     return vk::PipelineCreateFlags2{legacyFlags} | vk::PipelineCreateFlagBits2::eCaptureDataKHR;
 }
 
+// loadOrCreateAndCapturePipeline requires createInfo.pNext to be the caller-owned chain
+// head (nullptr when the create info has no extension chain) on entry. It relinks the
+// chain while attaching pipeline binaries or capture flags and restores the original
+// chain head before returning. When deferredRetry is true, a failed immediate recreation
+// falls back to returning a null pipeline instead of propagating the error, so the caller
+// can retry through a deferred host operation.
+template <bool deferredRetry = false, typename CreateInfo, typename CreatePipeline,
+          std::convertible_to<std::string_view> PipelineKind>
+    requires std::invocable<CreatePipeline &, const CreateInfo &> &&
+             std::same_as<std::invoke_result_t<CreatePipeline &, const CreateInfo &>, vk::raii::Pipeline>
+[[nodiscard]] vk::raii::Pipeline loadOrCreateAndCapturePipeline(PipelineBinaryStore &binaryStore,
+                                                                std::uint64_t contentFingerprint,
+                                                                CreateInfo &createInfo, PipelineKind &&pipelineKind,
+                                                                CreatePipeline &&createPipeline,
+                                                                PipelineBinaryCacheKey *keyOut = nullptr,
+                                                                bool *loadedFromCacheOut = nullptr)
+{
+    auto *const originalNext = createInfo.pNext;
+    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
+    pipelineCreateInfo.pNext = &createInfo;
+    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
+    if (keyOut != nullptr)
+    {
+        *keyOut = pipelineKey;
+    }
+    auto const kindText = std::string_view{pipelineKind};
+    if (auto binaries = binaryStore.load(pipelineKey))
+    {
+        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
+        binaryInfo.pNext = originalNext;
+        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
+        binaryInfo.pPipelineBinaries = binaries->handles.data();
+        createInfo.pNext = &binaryInfo;
+        try
+        {
+            auto pipeline = std::invoke(createPipeline, createInfo);
+            binaryStore.markLoadAccepted();
+            if (loadedFromCacheOut != nullptr)
+            {
+                *loadedFromCacheOut = true;
+            }
+            return pipeline;
+        }
+        catch (const vk::SystemError &error)
+        {
+            nrLog<LogLevel::warning>("{} rejected persisted PSO binaries and will rebuild: {}", kindText, error.what());
+            binaryStore.invalidate(pipelineKey);
+        }
+    }
+    if (loadedFromCacheOut != nullptr)
+    {
+        *loadedFromCacheOut = false;
+    }
+
+    auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
+    captureInfo.pNext = originalNext;
+    captureInfo.flags = capturePipelineFlags(createInfo.flags);
+    createInfo.pNext = &captureInfo;
+    try
+    {
+        auto pipeline = std::invoke(createPipeline, createInfo);
+        binaryStore.capture(pipelineKey, *pipeline);
+        createInfo.pNext = originalNext;
+        return pipeline;
+    }
+    catch (const vk::SystemError &error)
+    {
+        if constexpr (deferredRetry)
+        {
+            nrLog<LogLevel::warning>("{} immediate PSO creation failed and will retry deferred: {}", kindText,
+                                     error.what());
+            createInfo.pNext = originalNext;
+            return vk::raii::Pipeline{nullptr};
+        }
+        else
+        {
+            throw;
+        }
+    }
+}
+
 template <typename TEnum>
     requires std::is_enum_v<TEnum>
 void appendPsoEnum(std::uint64_t &fingerprint, TEnum value) noexcept
@@ -939,36 +1020,33 @@ void pushConstantsToCommandBuffer(const vk::raii::CommandBuffer &commandBuffer, 
     });
 }
 
-void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::ShaderModule &shaderModule,
-                              std::string_view name)
+template <vk::ObjectType ObjectType, typename Handle>
+void setDebugObjectNameChecked(const vk::raii::Device &device, const Handle &handle, std::string_view name)
 {
     if constexpr (gpuDebugNamesEnabled)
     {
-        if (name.empty())
-        {
-            return;
-        }
-
-        auto debugName = std::string{name};
-        vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
-        objectNameInfo.objectType = vk::ObjectType::eShaderModule;
-        const auto rawHandle = *shaderModule;
-        static_assert(sizeof(rawHandle) == sizeof(std::uint64_t),
-                      "VkShaderModule handle size must match std::uint64_t for debug naming.");
-        objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
-        objectNameInfo.pObjectName = debugName.c_str();
         try
         {
-            device.setDebugUtilsObjectNameEXT(objectNameInfo);
+            nr::rhi::setDebugObjectName<ObjectType>(device, handle, name);
         }
         catch (const vk::SystemError &error)
         {
             auto errorText = std::string_view{error.what()};
-            nrLog<LogLevel::warning>("setShaderModuleDebugName failed to set debug name '{}': {}", debugName,
-                                   errorText);
-            nrAssert(false, "setShaderModuleDebugName failed to set a Vulkan debug object name.");
+            nrLog<LogLevel::warning>("Failed to set Vulkan debug name '{}': {}", name, errorText);
+            nrAssert(false, "Failed to set a Vulkan debug object name.");
         }
     }
+}
+
+void setShaderModuleDebugName(const vk::raii::Device &device, const vk::raii::ShaderModule &shaderModule,
+                              std::string_view name)
+{
+    setDebugObjectNameChecked<vk::ObjectType::eShaderModule>(device, shaderModule, name);
+}
+
+void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name)
+{
+    setDebugObjectNameChecked<vk::ObjectType::ePipeline>(device, pipeline, name);
 }
 
 [[nodiscard]] std::string makeShaderModuleDebugName(const SlangEntryPointData &entryPoint)
@@ -1164,44 +1242,20 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     createInfo.layout = layout.raw();
     createInfo.pNext = &renderingInfo;
 
-    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
-    pipelineCreateInfo.pNext = &createInfo;
-    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
     GraphicsPipeline pipeline;
-    if (auto binaries = binaryStore.load(pipelineKey))
-    {
-        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
-        binaryInfo.pNext = createInfo.pNext;
-        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
-        binaryInfo.pPipelineBinaries = binaries->handles.data();
-        createInfo.pNext = &binaryInfo;
-        try
-        {
-            pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
-            binaryStore.markLoadAccepted();
-            return pipeline;
-        }
-        catch (const vk::SystemError &error)
-        {
-            nrLog<LogLevel::warning>("GraphicsPipeline rejected persisted PSO binaries and will rebuild: {}", error.what());
-            binaryStore.invalidate(pipelineKey);
-        }
-    }
-
-    auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
-    captureInfo.pNext = &renderingInfo;
-    captureInfo.flags = capturePipelineFlags(createInfo.flags);
-    createInfo.pNext = &captureInfo;
     try
     {
-        pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
+        pipeline.pipeline_ = loadOrCreateAndCapturePipeline(
+            binaryStore, contentFingerprint, createInfo, "GraphicsPipeline",
+            [&device](const vk::GraphicsPipelineCreateInfo &info) {
+                return vk::raii::Pipeline(device, nullptr, info);
+            });
     }
     catch (const vk::SystemError &error)
     {
         nrLog<LogLevel::error>("GraphicsPipeline creation failed: {}", error.what());
         return {};
     }
-    binaryStore.capture(pipelineKey, *pipeline.pipeline_);
     return pipeline;
 }
 
@@ -1234,42 +1288,18 @@ void VkShaderProgram::appendStage(VkShaderProgram &program, const vk::raii::Devi
     createInfo.stage = shaderProgram.stageCreateInfo(stageIndex);
     createInfo.layout = layout.raw();
 
-    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
-    pipelineCreateInfo.pNext = &createInfo;
-    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
     ComputePipeline pipeline;
-    if (auto binaries = binaryStore.load(pipelineKey))
-    {
-        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
-        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
-        binaryInfo.pPipelineBinaries = binaries->handles.data();
-        createInfo.pNext = &binaryInfo;
-        try
-        {
-            pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
-            binaryStore.markLoadAccepted();
-            return pipeline;
-        }
-        catch (const vk::SystemError &error)
-        {
-            nrLog<LogLevel::warning>("ComputePipeline rejected persisted PSO binaries and will rebuild: {}", error.what());
-            binaryStore.invalidate(pipelineKey);
-        }
-    }
-
-    auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
-    captureInfo.flags = capturePipelineFlags(createInfo.flags);
-    createInfo.pNext = &captureInfo;
     try
     {
-        pipeline.pipeline_ = vk::raii::Pipeline(device, nullptr, createInfo);
+        pipeline.pipeline_ = loadOrCreateAndCapturePipeline(
+            binaryStore, contentFingerprint, createInfo, "ComputePipeline",
+            [&device](const vk::ComputePipelineCreateInfo &info) { return vk::raii::Pipeline(device, nullptr, info); });
     }
     catch (const vk::SystemError &error)
     {
         nrLog<LogLevel::error>("ComputePipeline creation failed: {}", error.what());
         return {};
     }
-    binaryStore.capture(pipelineKey, *pipeline.pipeline_);
     return pipeline;
 }
 
@@ -1387,47 +1417,42 @@ struct DeferredHostJoinResult
     createInfo.maxPipelineRayRecursionDepth = desc.maxRayRecursionDepth;
     createInfo.layout = layout.raw();
 
-    auto pipelineCreateInfo = vk::PipelineCreateInfoKHR{};
-    pipelineCreateInfo.pNext = &createInfo;
-    auto const pipelineKey = binaryStore.pipelineKey(pipelineCreateInfo, contentFingerprint);
     auto const createStart = std::chrono::steady_clock::now();
     auto workerCount = std::uint32_t{0u};
     auto driverConcurrency = std::uint32_t{0u};
-    auto creationMode = std::string_view{"binary"};
-    auto pipelineHandle = vk::raii::Pipeline{nullptr};
-    if (auto binaries = binaryStore.load(pipelineKey))
-    {
-        auto binaryInfo = vk::PipelineBinaryInfoKHR{};
-        binaryInfo.binaryCount = static_cast<std::uint32_t>(binaries->handles.size());
-        binaryInfo.pPipelineBinaries = binaries->handles.data();
-        createInfo.pNext = &binaryInfo;
-        try
+    auto creationMode = std::string_view{};
+    auto deferredOperation = vk::raii::DeferredOperationKHR{nullptr};
+    // Deferred commands may retain pointer parameters until completion. Keep the output
+    // slot in this frame, then transfer the completed handle to RAII.
+    auto rawPipeline = vk::Pipeline{};
+    auto createWithDeferredOperation = [&device, &deferredOperation,
+                                        &rawPipeline](const vk::RayTracingPipelineCreateInfoKHR &info) {
+        rawPipeline = vk::Pipeline{};
+        auto const result = (*device).createRayTracingPipelinesKHR(*deferredOperation, nullptr, 1u, &info, nullptr,
+                                                                   &rawPipeline, *device.getDispatcher());
+        nrAssert(result == vk::Result::eSuccess || result == vk::Result::eOperationNotDeferredKHR ||
+                     result == vk::Result::eOperationDeferredKHR,
+                 "RayTracingPipeline creation returned {}.", vk::to_string(result));
+        if (result != vk::Result::eSuccess)
         {
-            pipelineHandle = vk::raii::Pipeline{device, nullptr, nullptr, createInfo};
+            return vk::raii::Pipeline{nullptr};
         }
-        catch (const vk::SystemError &error)
-        {
-            nrLog<LogLevel::warning>("RayTracingPipeline rejected persisted PSO binaries and will rebuild: {}",
-                                     error.what());
-        }
-        if (*pipelineHandle == nullptr)
-        {
-            binaryStore.invalidate(pipelineKey);
-        }
-        else
-        {
-            binaryStore.markLoadAccepted();
-        }
-    }
+        return vk::raii::Pipeline{device, static_cast<VkPipeline>(rawPipeline)};
+    };
+    auto pipelineKey = PipelineBinaryCacheKey{};
+    auto loadedFromCache = false;
+    auto pipelineHandle = loadOrCreateAndCapturePipeline<true>(binaryStore, contentFingerprint, createInfo,
+                                                               "RayTracingPipeline", createWithDeferredOperation,
+                                                               &pipelineKey, &loadedFromCache);
+    creationMode = loadedFromCache ? "binary" : "driver-immediate";
 
     if (*pipelineHandle == nullptr)
     {
-        creationMode = "driver-immediate";
+        creationMode = "deferred-host";
         auto captureInfo = vk::PipelineCreateFlags2CreateInfoKHR{};
+        captureInfo.pNext = createInfo.pNext;
         captureInfo.flags = capturePipelineFlags(createInfo.flags);
         createInfo.pNext = &captureInfo;
-
-        auto deferredOperation = vk::raii::DeferredOperationKHR{nullptr};
         try
         {
             deferredOperation = vk::raii::DeferredOperationKHR{device};
@@ -1438,15 +1463,12 @@ struct DeferredHostJoinResult
             return {};
         }
 
-        // Deferred commands may retain pointer parameters until completion. Keep
-        // the output slot in this frame, then transfer the completed handle to RAII.
-        auto rawPipeline = vk::Pipeline{};
+        rawPipeline = vk::Pipeline{};
         auto const initialResult = (*device).createRayTracingPipelinesKHR(
             *deferredOperation, nullptr, 1u, &createInfo, nullptr, &rawPipeline, *device.getDispatcher());
 
         if (initialResult == vk::Result::eOperationDeferredKHR)
         {
-            creationMode = "deferred-host";
             driverConcurrency = deferredOperation.getMaxConcurrency();
             nrAssert(driverConcurrency > 0u,
                      "RayTracingPipeline received a deferred operation with zero available concurrency.");
@@ -1502,6 +1524,10 @@ struct DeferredHostJoinResult
                      "RayTracingPipeline creation returned {}.", vk::to_string(initialResult));
         }
 
+        if (initialResult != vk::Result::eOperationDeferredKHR)
+        {
+            creationMode = "driver-immediate";
+        }
         pipelineHandle = vk::raii::Pipeline{device, static_cast<VkPipeline>(rawPipeline)};
         nrAssert(*pipelineHandle != nullptr,
                  "RayTracingPipeline creation completed without a valid pipeline handle.");
@@ -1578,36 +1604,6 @@ struct DeferredHostJoinResult
     auto dataSize = static_cast<std::size_t>(capabilities_.shaderGroupHandleSize) *
                     static_cast<std::size_t>(groupCount);
     return pipeline_.getRayTracingShaderGroupHandlesKHR<std::uint8_t>(firstGroup, groupCount, dataSize);
-}
-
-void setPipelineDebugName(const vk::raii::Device &device, vk::Pipeline pipeline, std::string_view name)
-{
-    if constexpr (gpuDebugNamesEnabled)
-    {
-        if (pipeline == vk::Pipeline{} || name.empty())
-        {
-            return;
-        }
-
-        auto debugName = std::string{name};
-        vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
-        objectNameInfo.objectType = vk::ObjectType::ePipeline;
-        const auto rawHandle = static_cast<VkPipeline>(pipeline);
-        static_assert(sizeof(rawHandle) == sizeof(std::uint64_t),
-                      "VkPipeline handle size must match std::uint64_t for debug naming.");
-        objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
-        objectNameInfo.pObjectName = debugName.c_str();
-        try
-        {
-            device.setDebugUtilsObjectNameEXT(objectNameInfo);
-        }
-        catch (const vk::SystemError &error)
-        {
-            auto errorText = std::string_view{error.what()};
-            nrLog<LogLevel::warning>("setPipelineDebugName failed to set debug name '{}': {}", debugName, errorText);
-            nrAssert(false, "setPipelineDebugName failed to set a Vulkan debug object name.");
-        }
-    }
 }
 
 PipelineService::PipelineService() = default;

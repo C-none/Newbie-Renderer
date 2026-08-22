@@ -108,23 +108,14 @@ void Scene::recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUpl
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan Scene::makeTransferToGraphicsUploadPlan(
     vk::PipelineStageFlags2 acquireStages, vk::AccessFlags2 acquireAccess) const
 {
-    auto const transferQueueFamily = device_.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsQueueFamily = device_.queueManager.graphics().queueFamilyIndex();
-    nrAssert(transferQueueFamily != graphicsQueueFamily,
+    auto const queueFamilies = device_.queueManager.familyIndices();
+    nrAssert(queueFamilies.transfer != queueFamilies.graphics,
              "Scene upload requires distinct transfer and graphics queue families.");
-
-    auto plan = nr::rhi::ops::BufferUploadOwnershipPlan{};
-    plan.releaseToDestination =
-        nr::rhi::ops::makeQueueOwnershipTransfer(transferQueueFamily, graphicsQueueFamily,
-                                                 nr::rhi::ops::QueueAccessScope{
-                                                     .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                     .access = vk::AccessFlagBits2::eTransferWrite,
-                                                 },
-                                                 nr::rhi::ops::QueueAccessScope{
-                                                     .stages = acquireStages,
-                                                     .access = acquireAccess,
-                                                 });
-    return plan;
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.graphics,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = acquireStages,
+                                                             .access = acquireAccess,
+                                                         });
 }
 
 [[nodiscard]] std::size_t Scene::meshUploadBytes(const nr::resource::Mesh &mesh) noexcept
@@ -132,19 +123,6 @@ void Scene::recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUpl
     auto vertexBytes = std::span{mesh.vertices}.size_bytes();
     auto indexBytes = std::span{mesh.indices}.size_bytes();
     return vertexBytes + indexBytes;
-}
-
-[[nodiscard]] std::size_t Scene::textureUploadBytes(const nr::resource::Texture &texture) noexcept
-{
-    auto withPixels = std::ranges::find_if(texture.levels,
-                                           [](const nr::resource::ImageLevel &level) { return !level.bytes.empty(); });
-
-    if (withPixels == texture.levels.end())
-    {
-        return 0;
-    }
-
-    return withPixels->bytes.size();
 }
 
 [[nodiscard]] std::optional<std::reference_wrapper<const nr::resource::ImageLevel>> Scene::firstTextureLevelWithPixels(
@@ -161,6 +139,12 @@ void Scene::recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUpl
     return std::cref(*withPixels);
 }
 
+[[nodiscard]] std::size_t Scene::textureUploadBytes(const nr::resource::Texture &texture) noexcept
+{
+    auto const sourceLevel = firstTextureLevelWithPixels(texture);
+    return sourceLevel.has_value() ? sourceLevel->get().bytes.size() : 0u;
+}
+
 [[nodiscard]] std::uint32_t Scene::checkedDeviceSizeToUint32(vk::DeviceSize value, std::string_view label)
 {
     nrAssert(value <= std::numeric_limits<std::uint32_t>::max(), "{} value {} exceeds uint32_t range.", label,
@@ -170,10 +154,11 @@ void Scene::recordBudgetedUpload(UploadBudgetState &budget, std::size_t bytesUpl
 
 [[nodiscard]] std::vector<std::uint32_t> Scene::makeGeometryAtlasQueueFamilyIndices() const
 {
+    auto const queueFamilies = device_.queueManager.familyIndices();
     auto families = std::vector<std::uint32_t>{
-        device_.queueManager.transfer().queueFamilyIndex(),
-        device_.queueManager.graphics().queueFamilyIndex(),
-        device_.queueManager.compute().queueFamilyIndex(),
+        queueFamilies.transfer,
+        queueFamilies.graphics,
+        queueFamilies.compute,
     };
     std::ranges::sort(families);
     auto uniqueTail = std::ranges::unique(families);
@@ -509,10 +494,10 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
         device_.queueManager.graphics().queueFamilyIndex(),
         vk::CommandPoolCreateFlagBits::eTransient,
     };
-    growWork.commandBuffers.emplace(growWork.commandPool.allocatePrimary(1));
+    growWork.commandBuffers.emplace(growWork.commandPool.allocate<vk::CommandBufferLevel::ePrimary>(1));
     auto &commandBuffer = growWork.commandBuffers->front();
 
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     {
         auto postCopyBarriers = nr::rhi::ops::BarrierBatch{};
 
@@ -558,7 +543,7 @@ void Scene::submitGeometryAtlasGrowCopy(std::optional<nr::rhi::Buffer> oldVertex
 
         nr::rhi::ops::pipelineBarrier(commandBuffer, postCopyBarriers);
     }
-    nr::rhi::CommandRecorder::end(commandBuffer);
+    commandBuffer.end();
 
     auto growSubmission = nr::rhi::CommandBatch{};
     growSubmission.addCommandBuffer(commandBuffer);
@@ -943,10 +928,10 @@ void Scene::submitPendingGraphicsSyncBatches(nr::rhi::ops::UploadReadbackContext
         device_.queueManager.graphics().queueFamilyIndex(),
         vk::CommandPoolCreateFlagBits::eTransient,
     };
-    syncWork.commandBuffers.emplace(syncWork.commandPool.allocatePrimary(1));
+    syncWork.commandBuffers.emplace(syncWork.commandPool.allocate<vk::CommandBufferLevel::ePrimary>(1));
     auto &syncCommandBuffer = syncWork.commandBuffers->front();
 
-    nr::rhi::CommandRecorder::beginPrimary(syncCommandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    syncCommandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     std::ranges::for_each(batches, [&](const PendingGraphicsSyncBatch &batch) {
         std::ranges::for_each(batch.bufferTickets, [&](const nr::rhi::ops::BufferUploadTicket &ticket) {
             uploadContext.recordAcquireBarrier(syncCommandBuffer, ticket);
@@ -955,7 +940,7 @@ void Scene::submitPendingGraphicsSyncBatches(nr::rhi::ops::UploadReadbackContext
             uploadContext.recordImageAcquireBarrier(syncCommandBuffer, ticket);
         });
     });
-    nr::rhi::CommandRecorder::end(syncCommandBuffer);
+    syncCommandBuffer.end();
     syncSubmission.addCommandBuffer(syncCommandBuffer);
 
     syncWork.fence = vk::raii::Fence(device_.device, vk::FenceCreateInfo{});

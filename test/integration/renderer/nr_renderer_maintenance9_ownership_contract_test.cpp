@@ -8,8 +8,7 @@ namespace
 {
 const nr::test::CaseRegistrar maintenance9OwnershipCase{
     "renderer maintenance9 specialization removes retained initial ownership submit", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_renderer_maintenance9_ownership_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_renderer_maintenance9_ownership_contract_test", "NewbieRenderer");
 
         auto const guideUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled |
                                 vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc;

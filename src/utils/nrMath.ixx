@@ -1,7 +1,41 @@
 export module nr.utils:math;
+import :errorHandle;
 import std;
 export namespace nr
 {
+
+template <std::unsigned_integral T> [[nodiscard]] constexpr T checkedAdd(T lhs, T rhs, std::string_view context)
+{
+    nrAssert(lhs <= std::numeric_limits<T>::max() - rhs, "{} addition exceeds the destination integer range.", context);
+    return lhs + rhs;
+}
+
+template <std::unsigned_integral T> [[nodiscard]] constexpr T checkedMultiply(T lhs, T rhs, std::string_view context)
+{
+    nrAssert(rhs == 0 || lhs <= std::numeric_limits<T>::max() / rhs,
+             "{} multiplication exceeds the destination integer range.", context);
+    return lhs * rhs;
+}
+
+template <std::unsigned_integral T> [[nodiscard]] constexpr T checkedAlignUp(T value, T alignment, std::string_view context)
+{
+    nrAssert(alignment > 0, "{} requires alignment > 0.", context);
+    const auto remainder = value % alignment;
+    if (remainder == 0)
+    {
+        return value;
+    }
+    return checkedAdd(value, alignment - remainder, context);
+}
+
+template <std::unsigned_integral T> [[nodiscard]] constexpr std::optional<T> tryCheckedMultiply(T lhs, T rhs) noexcept
+{
+    if (rhs != 0 && lhs > std::numeric_limits<T>::max() / rhs)
+    {
+        return std::nullopt;
+    }
+    return lhs * rhs;
+}
 
 namespace hash
 {

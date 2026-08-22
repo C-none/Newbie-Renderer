@@ -2,12 +2,58 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Newbie Renderer: a C++26 / Slang / Vulkan research renderer. Supported features, todo list, and a browser EXR tone mapping demo." />
-    <title>Newbie Renderer — Features and Todo List</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#020617">
+    <meta name="color-scheme" content="dark">
+    <meta
+      name="description"
+      content="Newbie Renderer is a Vulkan 1.4 path-tracing research renderer for Windows and NVIDIA Ada or Blackwell GPUs, with Slang, DLSS Ray Reconstruction, a multi-queue render graph, and GPU neural appearance experiments."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Newbie Renderer">
+    <meta property="og:title" content="Newbie Renderer — Vulkan Research Renderer for Ada + Blackwell">
+    <meta
+      property="og:description"
+      content="Path tracing, DLSS Ray Reconstruction, modern GPU scheduling, and bounded neural appearance experiments on Vulkan."
+    >
+    <meta property="og:url" content="https://c-none.github.io/Newbie-Renderer/">
+    <meta property="og:image" content="https://c-none.github.io/Newbie-Renderer/og.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Newbie Renderer — Vulkan research renderer for NVIDIA Ada and Blackwell">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Newbie Renderer — Vulkan Research Renderer for Ada + Blackwell">
+    <meta
+      name="twitter:description"
+      content="Path tracing, DLSS Ray Reconstruction, modern GPU scheduling, and bounded neural appearance experiments on Vulkan."
+    >
+    <meta name="twitter:image" content="https://c-none.github.io/Newbie-Renderer/og.png">
+    <link rel="canonical" href="https://c-none.github.io/Newbie-Renderer/">
+    <link rel="icon" href="/Newbie-Renderer/favicon.ico" sizes="any">
+    <title>Newbie Renderer — Vulkan Research Renderer for Ada + Blackwell</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "Newbie Renderer",
+        "description": "A Vulkan 1.4 path-tracing research renderer for Windows and NVIDIA Ada or Blackwell GPUs.",
+        "codeRepository": "https://github.com/C-none/Newbie-Renderer",
+        "url": "https://c-none.github.io/Newbie-Renderer/",
+        "license": "https://github.com/C-none/Newbie-Renderer/blob/master/LICENSE",
+        "operatingSystem": "Windows",
+        "programmingLanguage": ["C++", "Slang"]
+      }
+    </script>
   </head>
-  <body>
-    <div id="app"></div>
+  <body style="margin: 0; background: #020617;">
+    <div id="app">
+      <main style="margin: 4rem auto; max-width: 48rem; padding: 0 1rem; color: #e2e8f0; font-family: sans-serif;">
+        <h1>Newbie Renderer</h1>
+        <p>A Vulkan research renderer for Windows and NVIDIA Ada or Blackwell GPUs only.</p>
+        <p>This interactive single-page showcase requires JavaScript.</p>
+        <a style="color: #67e8f9;" href="https://github.com/C-none/Newbie-Renderer">Open the source repository</a>
+      </main>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

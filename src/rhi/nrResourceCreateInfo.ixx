@@ -29,11 +29,15 @@ template <vk::ImageType ImageType = vk::ImageType::e2D>
                                           arrayLayers);
 }
 
+/**
+ * @brief Build a buffer create-info; zero-size requests are clamped to 1 byte
+ *        because vk::BufferCreateInfo::size must be greater than 0.
+ */
 [[nodiscard]] constexpr vk::BufferCreateInfo makeBufferCreateInfo(vk::DeviceSize size,
                                                                   vk::BufferUsageFlags usage) noexcept
 {
     auto bufferInfo = vk::BufferCreateInfo{};
-    bufferInfo.size = size;
+    bufferInfo.size = std::max<vk::DeviceSize>(size, 1u);
     bufferInfo.usage = usage;
     return bufferInfo;
 }

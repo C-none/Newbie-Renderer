@@ -412,6 +412,16 @@ struct BufferUploadOwnershipPlan
     [[nodiscard]] bool valid(std::uint32_t transferQueueFamilyIndex) const noexcept;
 };
 
+/**
+ * @brief Build the canned transfer-queue upload ownership plan.
+ *
+ * The release scope is fixed to transfer-write completion; only the
+ * destination-queue acquire scope varies between consumers.
+ */
+[[nodiscard]] BufferUploadOwnershipPlan
+makeTransferUploadOwnershipPlan(std::uint32_t transferQueueFamilyIndex, std::uint32_t dstQueueFamilyIndex,
+                                const QueueAccessScope &acquireScope);
+
 namespace detail
 {
 template <OwnershipBarrierPhase TOwnershipPhase>

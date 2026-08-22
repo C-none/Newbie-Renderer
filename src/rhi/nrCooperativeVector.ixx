@@ -13,6 +13,13 @@ enum class CooperativeVectorMatrixLayout : std::uint8_t
 {
     RowMajor,
     TrainingOptimal,
+    InferencingOptimal,
+};
+
+enum class CooperativeVectorComponentType : std::uint8_t
+{
+    Float16,
+    FloatE4M3,
 };
 
 struct CooperativeVectorMatrixDesc
@@ -21,6 +28,7 @@ struct CooperativeVectorMatrixDesc
     std::uint32_t columns = 0;
     CooperativeVectorMatrixLayout layout = CooperativeVectorMatrixLayout::RowMajor;
     vk::DeviceSize rowStrideBytes = 0;
+    CooperativeVectorComponentType componentType = CooperativeVectorComponentType::Float16;
 };
 
 struct CooperativeVectorMatrixMemory
@@ -51,5 +59,24 @@ struct CooperativeVectorCapabilitySnapshot
     bool fullFloat16Tuple = false;
     bool fullFloat16TupleWithTranspose = false;
     std::uint32_t maxComponents = 0;
+    // Every tuple reported by vkGetPhysicalDeviceCooperativeVectorPropertiesNV.
+    // The booleans above are cached predicates over this list; consumers that
+    // need a non-admitted tuple, such as FP8 inference, query it here.
+    std::vector<vk::CooperativeVectorPropertiesNV> supportedTuples{};
 };
+
+// Row-major layout sizes are computed; TrainingOptimal/InferencingOptimal sizes
+// are queried through vkConvertCooperativeVectorMatrixNV with a host source.
+[[nodiscard]] CooperativeVectorMatrixLayoutSize queryCooperativeVectorMatrixLayoutSize(
+    const vk::raii::Device &device, CooperativeVectorMatrixDesc desc);
+
+// The source and destination regions must describe exactly one matrix using the
+// cached layout sizes from queryCooperativeVectorMatrixLayoutSize.
+void recordCooperativeVectorMatrixConversion(const vk::raii::CommandBuffer &commandBuffer,
+                                             CooperativeVectorMatrixMemory source,
+                                             CooperativeVectorMatrixDesc sourceDesc,
+                                             CooperativeVectorMatrixLayoutSize sourceLayoutSize,
+                                             CooperativeVectorMatrixMemory destination,
+                                             CooperativeVectorMatrixDesc destinationDesc,
+                                             CooperativeVectorMatrixLayoutSize destinationLayoutSize);
 } // namespace nr::rhi

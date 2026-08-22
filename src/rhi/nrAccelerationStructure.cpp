@@ -45,29 +45,17 @@ namespace nr::rhi
     createInfo.type = type;
     result.handle_ = vk::raii::AccelerationStructureKHR(device, createInfo);
 
-    if constexpr (gpuDebugNamesEnabled)
+    try
     {
-        if (!result.name_.empty())
-        {
-            vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
-            objectNameInfo.objectType = vk::ObjectType::eAccelerationStructureKHR;
-            const auto rawHandle = static_cast<VkAccelerationStructureKHR>(*result.handle_);
-            static_assert(sizeof(rawHandle) == sizeof(std::uint64_t),
-                          "VkAccelerationStructureKHR handle size must match std::uint64_t for debug naming.");
-            objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
-            objectNameInfo.pObjectName = result.name_.c_str();
-            try
-            {
-                result.device_->get().setDebugUtilsObjectNameEXT(objectNameInfo);
-            }
-            catch (const vk::SystemError &error)
-            {
-                auto errorText = std::string_view{error.what()};
-                nrLog<LogLevel::warning>("AccelerationStructureResource::create failed to set debug name '{}': {}",
-                                       result.name_, errorText);
-                nrAssert(false, "AccelerationStructureResource::create failed to set a Vulkan debug object name.");
-            }
-        }
+        setDebugObjectName<vk::ObjectType::eAccelerationStructureKHR>(result.device_->get(), result.handle_,
+                                                                     result.name_);
+    }
+    catch (const vk::SystemError &error)
+    {
+        auto errorText = std::string_view{error.what()};
+        nrLog<LogLevel::warning>("AccelerationStructureResource::create failed to set debug name '{}': {}",
+                                 result.name_, errorText);
+        nrAssert(false, "AccelerationStructureResource::create failed to set a Vulkan debug object name.");
     }
 
     return result;
@@ -198,7 +186,7 @@ namespace nr::rhi
     nrAssert(geometries.size() == maxPrimitiveCounts.size(),
              "queryAccelerationStructureBuildSizes requires one max primitive count per geometry.");
 
-    auto flagDiagnostics = detail::validateBuildFlagCombination(options);
+    auto flagDiagnostics = rhi::detail::validateBuildFlagCombination(options);
     nrAssert(flagDiagnostics.isValid, "queryAccelerationStructureBuildSizes invalid options: {}",
              flagDiagnostics.message);
 
@@ -252,7 +240,7 @@ namespace nr::rhi
                                                const AsBuildOptions &options,
                                                vk::AccelerationStructureBuildTypeKHR buildType)
 {
-    auto geometryDiagnostics = detail::validateBlasGeometryRecords(geometries);
+    auto geometryDiagnostics = rhi::detail::validateBlasGeometryRecords(geometries);
     nrAssert(geometryDiagnostics.isValid, "queryBlasBuildSizes invalid geometry: {}", geometryDiagnostics.message);
 
     auto vkGeometries = geometries |
@@ -260,7 +248,7 @@ namespace nr::rhi
                         std::ranges::to<std::vector>();
     auto primitiveCounts =
         geometries |
-        std::views::transform([](const BlasGeometryRecord &record) { return detail::geometryPrimitiveCount(record); }) |
+        std::views::transform([](const BlasGeometryRecord &record) { return rhi::detail::geometryPrimitiveCount(record); }) |
         std::ranges::to<std::vector>();
 
     return queryAccelerationStructureBuildSizes(device, vk::AccelerationStructureTypeKHR::eBottomLevel,
@@ -274,7 +262,7 @@ namespace nr::rhi
 {
     nrAssert(input.instanceCount > 0, "queryTlasBuildSizes requires instanceCount > 0.");
 
-    auto flagDiagnostics = detail::validateBuildFlagCombination(options);
+    auto flagDiagnostics = rhi::detail::validateBuildFlagCombination(options);
     nrAssert(flagDiagnostics.isValid, "queryTlasBuildSizes invalid options: {}", flagDiagnostics.message);
 
     vk::AccelerationStructureGeometryInstancesDataKHR instances{};
@@ -460,7 +448,7 @@ void recordBuildBlasGeometries(const vk::raii::CommandBuffer &commandBuffer, con
                                vk::DeviceSize scratchAlignment)
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildBlasGeometries requires a valid command buffer.");
-    auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
+    auto diagnostics = rhi::detail::validateAsBuildInputs(info, scratchAlignment);
     nrAssert(diagnostics.isValid, "recordBuildBlasGeometries invalid input: {}", diagnostics.message);
 
     auto geometries = info.geometries |
@@ -531,7 +519,7 @@ void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const TlasBui
                      vk::DeviceSize scratchAlignment)
 {
     nrAssert(*commandBuffer != nullptr, "recordBuildTlas requires a valid command buffer.");
-    auto diagnostics = detail::validateAsBuildInputs(info, scratchAlignment);
+    auto diagnostics = rhi::detail::validateAsBuildInputs(info, scratchAlignment);
     nrAssert(diagnostics.isValid, "recordBuildTlas invalid input: {}", diagnostics.message);
 
     vk::AccelerationStructureGeometryInstancesDataKHR instances{};
@@ -567,20 +555,6 @@ void recordBuildTlas(const vk::raii::CommandBuffer &commandBuffer, const TlasBui
 
 namespace nr::rhi::detail
 {
-[[nodiscard]] ValidationResult validationSuccess()
-{
-    return ValidationResult{
-        .isValid = true,
-    };
-}
-
-[[nodiscard]] ValidationResult validationFailure(std::string message)
-{
-    return ValidationResult{
-        .message = std::move(message),
-    };
-}
-
 [[nodiscard]] bool hasBuildFlag(vk::BuildAccelerationStructureFlagsKHR flags,
                                 vk::BuildAccelerationStructureFlagBitsKHR bit)
 {
@@ -655,7 +629,7 @@ namespace nr::rhi::detail
         return validationFailure("Indexed triangle BLAS geometry requires firstVertex <= maxVertex.");
     }
 
-    auto requiredIndexAlignment = detail::indexTypeAlignment(triangles.indexType);
+    auto requiredIndexAlignment = indexTypeAlignment(triangles.indexType);
     if (requiredIndexAlignment > 0 && (triangles.indexData.deviceAddress % requiredIndexAlignment) != 0)
         return validationFailure(
             formatMessage("Triangle BLAS index address must be aligned to {} bytes.", requiredIndexAlignment));
@@ -719,14 +693,6 @@ namespace nr::rhi::detail
     return validationSuccess();
 }
 
-[[nodiscard]] std::optional<vk::DeviceSize> checkedGeometryByteSize(std::uint64_t count,
-                                                                    vk::DeviceSize stride) noexcept
-{
-    if (stride != 0u && count > std::numeric_limits<vk::DeviceSize>::max() / stride)
-        return std::nullopt;
-    return static_cast<vk::DeviceSize>(count) * stride;
-}
-
 [[nodiscard]] ValidationResult validateBlasGeometryRecord(const BlasGeometryRecord &record)
 {
     switch (record.geometry.geometryType)
@@ -739,7 +705,8 @@ namespace nr::rhi::detail
             return geometryValidation;
 
         auto const indexed = triangles.indexType != vk::IndexType::eNoneKHR;
-        auto const firstVertexBytes = checkedGeometryByteSize(record.range.firstVertex, triangles.vertexStride);
+        auto const firstVertexBytes =
+            nr::tryCheckedMultiply(static_cast<vk::DeviceSize>(record.range.firstVertex), triangles.vertexStride);
         if (!firstVertexBytes.has_value())
             return validationFailure("Triangle BLAS vertex range offset overflows VkDeviceSize.");
 
@@ -754,7 +721,7 @@ namespace nr::rhi::detail
             vertexOffset += record.range.primitiveOffset;
         }
 
-        auto vertexBytes = checkedGeometryByteSize(vertexCount, triangles.vertexStride);
+        auto vertexBytes = nr::tryCheckedMultiply(static_cast<vk::DeviceSize>(vertexCount), triangles.vertexStride);
         if (!vertexBytes.has_value())
             return validationFailure("Triangle BLAS vertex range size overflows VkDeviceSize.");
         auto vertexValidation = validateGeometryBufferRange("Triangle BLAS vertex data", record.dataBuffer.get(),
@@ -768,8 +735,8 @@ namespace nr::rhi::detail
             if (!record.indexBuffer.has_value())
                 return validationFailure("Indexed triangle BLAS geometry requires an index-buffer provenance.");
             auto const indexStride = indexTypeAlignment(triangles.indexType);
-            auto indexBytes = checkedGeometryByteSize(static_cast<std::uint64_t>(record.range.primitiveCount) * 3u,
-                                                      indexStride);
+            auto indexBytes = nr::tryCheckedMultiply(
+                static_cast<vk::DeviceSize>(static_cast<std::uint64_t>(record.range.primitiveCount) * 3u), indexStride);
             if (!indexBytes.has_value())
                 return validationFailure("Triangle BLAS index range size overflows VkDeviceSize.");
             auto indexValidation = validateGeometryBufferRange(
@@ -808,7 +775,8 @@ namespace nr::rhi::detail
             return geometryValidation;
         if (record.indexBuffer.has_value() || record.transformBuffer.has_value())
             return validationFailure("AABB BLAS geometry accepts only its data-buffer provenance.");
-        auto aabbBytes = checkedGeometryByteSize(record.range.primitiveCount, aabbs.stride);
+        auto aabbBytes =
+            nr::tryCheckedMultiply(static_cast<vk::DeviceSize>(record.range.primitiveCount), aabbs.stride);
         if (!aabbBytes.has_value())
             return validationFailure("AABB BLAS data range size overflows VkDeviceSize.");
         return validateGeometryBufferRange("AABB BLAS data", record.dataBuffer.get(), aabbs.data.deviceAddress,
@@ -835,7 +803,7 @@ namespace nr::rhi::detail
 [[nodiscard]] ValidationResult validateAsBuildInputs(const BlasGeometriesBuildRecordInfo &info,
                                                      vk::DeviceSize scratchAlignment)
 {
-    auto flagDiagnostics = detail::validateBuildFlagCombination(info.options);
+    auto flagDiagnostics = validateBuildFlagCombination(info.options);
     if (!flagDiagnostics.isValid)
         return flagDiagnostics;
 
@@ -855,7 +823,7 @@ namespace nr::rhi::detail
     if (scratchAlignment > 0 && (info.scratchAddress % scratchAlignment) != 0)
         return validationFailure(formatMessage("BLAS scratch address must be aligned to {} bytes.", scratchAlignment));
 
-    auto geometryDiagnostics = detail::validateBlasGeometryRecords(info.geometries);
+    auto geometryDiagnostics = validateBlasGeometryRecords(info.geometries);
     if (!geometryDiagnostics.isValid)
         return geometryDiagnostics;
 
@@ -864,7 +832,7 @@ namespace nr::rhi::detail
 
 [[nodiscard]] ValidationResult validateAsBuildInputs(const TlasBuildRecordInfo &info, vk::DeviceSize scratchAlignment)
 {
-    auto flagDiagnostics = detail::validateBuildFlagCombination(info.options);
+    auto flagDiagnostics = validateBuildFlagCombination(info.options);
     if (!flagDiagnostics.isValid)
         return flagDiagnostics;
 

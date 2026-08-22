@@ -40,14 +40,21 @@ public struct MaterialSample
     public float roughness = 1.0f;
     public float3 emissive = float3(0.0f);
     public float alpha = 1.0f;
+    public float3 dielectricF0 = float3(0.04f);
+    public float dielectricF90 = 1.0f;
+    public float occlusion = 1.0f;
 
-    public __init(float4 baseColor, float metallic, float roughness, float3 emissive, float alpha)
+    public __init(float4 baseColor, float metallic, float roughness, float3 emissive, float alpha,
+                  float3 dielectricF0, float dielectricF90, float occlusion)
     {
         this.baseColor = baseColor;
         this.metallic = metallic;
         this.roughness = roughness;
         this.emissive = emissive;
         this.alpha = alpha;
+        this.dielectricF0 = dielectricF0;
+        this.dielectricF90 = dielectricF90;
+        this.occlusion = occlusion;
     }
 };
 

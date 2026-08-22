@@ -48,7 +48,6 @@ std::atomic_uint64_t temporaryArtifactNonce = 0u;
 
 enum class HeaderOffset : std::size_t
 {
-    magic = 0u,
     version = 4u,
     headerBytes = 8u,
     totalBytes = 12u,

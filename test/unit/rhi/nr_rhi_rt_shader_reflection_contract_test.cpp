@@ -319,9 +319,9 @@ const nr::test::CaseRegistrar pathTracingTransmissionChsFamiliesCase{
         auto *headerLayout = materialHeader.typeLayout()->getElementTypeLayout();
         nr::test::require(headerLayout != nullptr, "RtMaterialHeader element layout should reflect");
         nr::test::requireEqual(static_cast<std::size_t>(headerLayout->getSize(slang::ParameterCategory::Uniform)),
-                               std::size_t{112u}, "RtMaterialHeader reflected size must match C++");
+                               std::size_t{128u}, "RtMaterialHeader reflected size must match C++");
         nr::test::requireEqual(static_cast<std::size_t>(headerLayout->getStride(slang::ParameterCategory::Uniform)),
-                               std::size_t{112u}, "RtMaterialHeader reflected stride must match C++");
+                               std::size_t{128u}, "RtMaterialHeader reflected stride must match C++");
 
         auto isotropicLayout = nr::rhi::ShaderDescriptorLayout::create(baseOnlyProgram);
         auto anisotropicLayout = nr::rhi::ShaderDescriptorLayout::create(anisotropicProgram);

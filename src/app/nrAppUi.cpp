@@ -114,23 +114,22 @@ int resizeInputTextBuffer(ImGuiInputTextCallbackData *data)
     return 0;
 }
 
-void submitKeyboardInput(auto &io, const nr::rhi::PresentationContext &presentation)
+void submitKeyboardInput(auto &io, nr::rhi::WindowInput &input)
 {
-    auto const controlDown = presentation.keyDown(kKeyLeftControl) || presentation.keyDown(kKeyRightControl);
-    auto const shiftDown = presentation.keyDown(kKeyLeftShift) || presentation.keyDown(kKeyRightShift);
-    auto const altDown = presentation.keyDown(kKeyLeftAlt) || presentation.keyDown(kKeyRightAlt);
-    auto const superDown = presentation.keyDown(kKeyLeftSuper) || presentation.keyDown(kKeyRightSuper);
+    auto const controlDown = input.keyDown(kKeyLeftControl) || input.keyDown(kKeyRightControl);
+    auto const shiftDown = input.keyDown(kKeyLeftShift) || input.keyDown(kKeyRightShift);
+    auto const altDown = input.keyDown(kKeyLeftAlt) || input.keyDown(kKeyRightAlt);
+    auto const superDown = input.keyDown(kKeyLeftSuper) || input.keyDown(kKeyRightSuper);
 
     io.AddKeyEvent(imgui::keyModCtrl, controlDown);
     io.AddKeyEvent(imgui::keyModShift, shiftDown);
     io.AddKeyEvent(imgui::keyModAlt, altDown);
     io.AddKeyEvent(imgui::keyModSuper, superDown);
 
-    std::ranges::for_each(kUiKeyBindings, [&](const UiKeyBinding &binding) {
-        io.AddKeyEvent(binding.key, presentation.keyDown(binding.glfwKey));
-    });
+    std::ranges::for_each(kUiKeyBindings,
+                          [&](const UiKeyBinding &binding) { io.AddKeyEvent(binding.key, input.keyDown(binding.glfwKey)); });
 
-    auto codepoints = presentation.consumeTextInputCodepoints();
+    auto codepoints = input.consumeTextInputCodepoints();
     std::ranges::for_each(codepoints, [&](std::uint32_t codepoint) { io.AddInputCharacter(codepoint); });
 }
 
@@ -236,7 +235,7 @@ bool UiSystem::initialized() const noexcept
     return context_ != nullptr;
 }
 
-void UiSystem::beginFrame(const nr::rhi::PresentationContext &presentation, float deltaSeconds)
+void UiSystem::beginFrame(nr::rhi::PresentationContext &presentation, float deltaSeconds)
 {
     nrAssert(initialized(), "UiSystem::beginFrame requires initialize() first.");
     nrAssert(frameState_ != FrameState::active,
@@ -269,17 +268,18 @@ void UiSystem::beginFrame(const nr::rhi::PresentationContext &presentation, floa
     io.DisplayFramebufferScale = ImVec2{1.0f, 1.0f};
     io.DeltaTime = sanitizedDelta;
 
-    auto const cursorPosition = presentation.cursorPosition();
+    auto &input = presentation.windowInput();
+    auto const cursorPosition = input.cursorPosition();
     io.AddMousePosEvent(static_cast<float>(cursorPosition.x), static_cast<float>(cursorPosition.y));
-    io.AddMouseButtonEvent(0, presentation.mouseButtonDown(detail::kMouseButtonLeft));
-    io.AddMouseButtonEvent(1, presentation.mouseButtonDown(detail::kMouseButtonRight));
-    io.AddMouseButtonEvent(2, presentation.mouseButtonDown(detail::kMouseButtonMiddle));
-    auto const verticalScrollOffset = presentation.consumeVerticalScrollOffset();
+    io.AddMouseButtonEvent(0, input.mouseButtonDown(detail::kMouseButtonLeft));
+    io.AddMouseButtonEvent(1, input.mouseButtonDown(detail::kMouseButtonRight));
+    io.AddMouseButtonEvent(2, input.mouseButtonDown(detail::kMouseButtonMiddle));
+    auto const verticalScrollOffset = input.consumeVerticalScrollOffset();
     if (verticalScrollOffset != 0.0)
     {
         io.AddMouseWheelEvent(0.0f, static_cast<float>(verticalScrollOffset));
     }
-    detail::submitKeyboardInput(io, presentation);
+    detail::submitKeyboardInput(io, input);
 
     ImGui::NewFrame();
     frameState_ = FrameState::active;

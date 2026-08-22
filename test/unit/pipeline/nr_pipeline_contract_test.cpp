@@ -751,8 +751,9 @@ const nr::test::CaseRegistrar cameraMovementSpeedBindingCase{
 const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
     "vertical wheel input is a per-poll Dear ImGui navigation event only", [] {
         auto const dependencyWindow = readProjectFile("src/extern/dependencyWindow.ixx");
+        auto const surfaceInterface = readProjectFile("src/rhi/nrSurface.ixx");
+        auto const surface = readProjectFile("src/rhi/nrSurface.cpp");
         auto const swapchainInterface = readProjectFile("src/rhi/nrSwapchain.ixx");
-        auto const swapchain = readProjectFile("src/rhi/nrSwapchain.cpp");
         auto const ui = readProjectFile("src/app/nrAppUi.cpp");
         auto const camera = readProjectFile("src/app/nrAppCamera.cpp");
         auto const optionModel = readProjectFile("src/options/nrOptionModel.ixx");
@@ -762,26 +763,27 @@ const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
 
         requirePresent(dependencyWindow, "export using ::glfwSetScrollCallback;",
                        "the narrow window dependency must expose GLFW scroll event registration");
-        requirePresent(swapchainInterface, "double consumeVerticalScrollOffset() const noexcept;",
-                       "PresentationContext must expose one-shot vertical scroll consumption");
+        requirePresent(surfaceInterface, "double consumeVerticalScrollOffset() noexcept;",
+                       "WindowInput must expose one-shot vertical scroll consumption as a mutating operation");
+        requireAbsent(swapchainInterface, "verticalScrollOffset_",
+                      "PresentationContext must not own scroll input state");
 
-        auto const surfaceCreation = sourceSection(swapchain, "void PresentationContext::createSurface(",
-                                                   "void PresentationContext::initializeSwapchain(");
-        requirePresent(surfaceCreation, "glfwSetScrollCallback(",
-                       "PresentationContext must register a GLFW scroll callback");
-        requirePresent(surfaceCreation, "verticalScrollOffset_ += yOffset;",
+        auto const inputConstruction = sourceSection(surface, "WindowInput::WindowInput(", "WindowInput::~WindowInput()");
+        requirePresent(inputConstruction, "glfwSetScrollCallback(",
+                       "WindowInput must register a GLFW scroll callback on construction");
+        requirePresent(inputConstruction, "verticalScrollOffset_ += yOffset;",
                        "all finite vertical events from one poll must accumulate");
-        requireAbsent(surfaceCreation, "xOffset",
+        requireAbsent(inputConstruction, "xOffset",
                       "horizontal scroll input must be discarded at the presentation boundary");
 
-        auto const polling = sourceSection(swapchain, "void PresentationContext::pollEvents() const",
-                                           "bool PresentationContext::keyDown(");
+        auto const polling =
+            sourceSection(surface, "void WindowInput::pollEvents()", "bool WindowInput::keyDown(");
         requireOrdered(polling, "verticalScrollOffset_ = 0.0;", "glfwPollEvents();",
                        "each event poll must discard unconsumed offsets from older presentation iterations");
 
         auto const consumption =
-            sourceSection(swapchain, "double PresentationContext::consumeVerticalScrollOffset() const noexcept",
-                          "std::vector<std::uint32_t> PresentationContext::consumeTextInputCodepoints()");
+            sourceSection(surface, "double WindowInput::consumeVerticalScrollOffset() noexcept",
+                          "std::vector<std::uint32_t> WindowInput::consumeTextInputCodepoints()");
         requirePresent(consumption, "std::exchange(verticalScrollOffset_, 0.0)",
                        "vertical scroll consumption must clear the accumulated delta");
 
@@ -791,7 +793,7 @@ const nr::test::CaseRegistrar verticalWheelUiOnlyCase{
 
         auto const uiFrame =
             sourceSection(ui, "void UiSystem::beginFrame(", "UiCaptureState UiSystem::finalizeFrame()");
-        requirePresent(uiFrame, "presentation.consumeVerticalScrollOffset();",
+        requirePresent(uiFrame, "input.consumeVerticalScrollOffset();",
                        "UiSystem must be the sole vertical scroll consumer");
         requirePresent(uiFrame, "io.AddMouseWheelEvent(0.0f,",
                        "UiSystem must forward only the vertical ImGui wheel axis");

@@ -37,6 +37,10 @@ namespace nr::resource
         return "transmission";
     case MaterialTextureSlotSemantic::anisotropy:
         return "anisotropy";
+    case MaterialTextureSlotSemantic::specular:
+        return "specular";
+    case MaterialTextureSlotSemantic::specularColor:
+        return "specularColor";
     default:
         return "unsupported";
     }

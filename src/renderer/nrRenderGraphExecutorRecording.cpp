@@ -139,8 +139,8 @@ namespace nr::renderer
 
     commandBuffer.reset();
     auto inheritanceInfo = vk::CommandBufferInheritanceInfo{};
-    nr::rhi::CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo,
-                                             vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    commandBuffer.begin(
+        vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit, &inheritanceInfo});
     {
         auto nodeDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
             commandBuffer,
@@ -191,7 +191,7 @@ namespace nr::renderer
             recordImplicitCopyPass(pass, commandBuffer, runtimeBindings);
         }
     }
-    nr::rhi::CommandRecorder::end(commandBuffer);
+    commandBuffer.end();
 
     return result;
 }
@@ -233,7 +233,7 @@ namespace nr::renderer
         beginFlags |= vk::CommandBufferUsageFlagBits::eRenderPassContinue;
     }
 
-    nr::rhi::CommandRecorder::beginSecondary(commandBuffer, inheritanceInfo, beginFlags);
+    commandBuffer.begin(vk::CommandBufferBeginInfo{beginFlags, &inheritanceInfo});
     {
         auto nodeDebugLabelScope = detail::ScopedCommandBufferDebugLabel{
             commandBuffer,
@@ -255,7 +255,7 @@ namespace nr::renderer
         });
         ++result.invokedPassRecordCount;
     }
-    nr::rhi::CommandRecorder::end(commandBuffer);
+    commandBuffer.end();
 
     return result;
 }

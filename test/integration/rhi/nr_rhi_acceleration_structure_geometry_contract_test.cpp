@@ -76,8 +76,7 @@ void requireBuildSizes(const nr::rhi::AsBuildSizes &sizes, std::string_view labe
 
 const nr::test::CaseRegistrar triangleGeometryRangeCase{
     "RHI triangle geometry range validation preserves indexed and non-indexed Vulkan offsets", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_acceleration_structure_geometry_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_acceleration_structure_geometry_contract_test", "NewbieRenderer");
 
         auto indexedVertices = createGeometryBuffer(device, 4u * sizeof(TestVertex), "as_range_indexed_vertices");
         auto indexedIndices = createGeometryBuffer(device, 6u * sizeof(std::uint32_t), "as_range_indexed_indices");

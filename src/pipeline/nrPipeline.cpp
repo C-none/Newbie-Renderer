@@ -778,7 +778,7 @@ void printViewerUsage(std::string_view executableName)
 
     while (!presentation.windowShouldClose())
     {
-        presentation.pollEvents();
+        presentation.windowInput().pollEvents();
         auto now = std::chrono::steady_clock::now();
         auto deltaSeconds = std::chrono::duration<float>(now - previousTick).count();
         previousTick = now;

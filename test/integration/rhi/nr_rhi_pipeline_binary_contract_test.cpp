@@ -146,8 +146,7 @@ const nr::test::CaseRegistrar pipelineBinaryCase{
         auto const cacheRoot = uniquePipelineBinaryRoot();
 
         {
-            auto coldDevice = nr::rhi::Device{};
-            coldDevice.initialize("nr_rhi_pipeline_binary_contract_test", "NewbieRenderer", cacheRoot);
+            auto coldDevice = nr::rhi::Device::create("nr_rhi_pipeline_binary_contract_test", "NewbieRenderer", cacheRoot);
             createAndValidatePipelines(coldDevice, programs, ExpectedPipelineBinaryPath::capture);
             nr::test::requireEqual(coldDevice.pipeline().pipelineBinaryLoadCount(), std::uint64_t{0u},
                                    "isolated cold PSOs should not load persisted pipeline binaries");
@@ -157,8 +156,7 @@ const nr::test::CaseRegistrar pipelineBinaryCase{
         requireProjectFingerprintedArtifacts(cacheRoot);
 
         {
-            auto warmDevice = nr::rhi::Device{};
-            warmDevice.initialize("nr_rhi_pipeline_binary_contract_test", "NewbieRenderer", cacheRoot);
+            auto warmDevice = nr::rhi::Device::create("nr_rhi_pipeline_binary_contract_test", "NewbieRenderer", cacheRoot);
             createAndValidatePipelines(warmDevice, programs, ExpectedPipelineBinaryPath::load);
             nr::test::requireEqual(warmDevice.pipeline().pipelineBinaryCaptureCount(), std::uint64_t{0u},
                                    "warm PSOs should not fall back to capture");

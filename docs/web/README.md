@@ -1,15 +1,38 @@
 # Web
 
-The showcase page for the renderer. It presents the supported features, the
-todo list, and a browser EXR tone mapping demo.
+The renderer's single-page showcase. It presents real captures, evidence-scoped
+capabilities, architecture, and the roadmap at `/`. Detailed
+content expands in place with native disclosure panels; this package has no
+secondary application route.
 
 ## Site content
 
-- `src/data/project.js` owns the feature cards and todo entries. It is the source
-  of truth for both lists; the repository README only links to this page.
-- `src/pages/index.vue` renders the hero, `#features`, `#roadmap`, and `#demo`
-  sections.
-- `src/components/ExrViewer.vue` owns the three.js EXR viewer used by `#demo`.
+- `src/data/project.js` owns support copy, case studies, capabilities,
+  architecture, and roadmap status.
+- `src/data/gallery.js` owns capture metadata and pairs each lightweight poster
+  with its web-owned OpenEXR source.
+- `src/pages/index.vue` renders the only page: `#gallery`, `#capabilities`,
+  `#architecture`, and `#roadmap`.
+- `src/components/ExrViewer.vue` shows a poster first. It downloads and decodes
+  the selected OpenEXR only when the visitor starts the HDR inspector.
+- `public/og.png` is the repository and social preview. `public/robots.txt` and
+  `public/sitemap.xml` describe the same canonical page.
+
+The supported user target is deliberately narrow: Windows on NVIDIA Ada or
+Blackwell. Do not broaden the copy to generic RTX, NVIDIA, Vulkan, or desktop
+hardware without a corresponding project support-policy change.
+
+## Capture posters
+
+The OpenEXR files are the source images. Regenerate the checked-in ACES Filmic
+PNG posters after replacing a capture:
+
+```sh
+pnpm generate:posters
+```
+
+The generator lives in `tools/generate-gallery-posters.mjs`; it uses the local
+three.js EXR decoder and does not fetch runtime assets.
 
 ## Local deployment
 

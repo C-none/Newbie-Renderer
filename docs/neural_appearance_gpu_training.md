@@ -63,7 +63,7 @@ Encoder input is the 12-value material vector:
 | `baseColor.rgb` | 3 | `[0,1]` |
 | `metallic` | 1 | `[0,1]` |
 | `roughness` | 1 | `[kMaterialMinRoughness,1]` |
-| `shadingNormal` in the geometry frame | 3 | unit |
+| `shadingNormal` in the geometry frame | 3 | unit, `y >= 0` |
 | `anisotropyTangent` in the geometry frame | 3 | unit |
 | `anisotropyStrength` | 1 | `[0,1]` |
 
@@ -114,8 +114,14 @@ state, so no per-sample gradient reduction and no float atomic capability are re
 Sampling and loss:
 
 - material samples are drawn from the joint parameter-space distribution above;
-- directions are uniform in `(thetaH, thetaD, phiH, phiD)` and rejected unless both directions
-  keep `y >= 1e-3`, which is the domain the folded reflection is defined on;
+- shading normals are sampled uniformly on the full unit disk in the geometry-frame `XZ`
+  projection with `r = sqrt(u)` and `phi = 2*pi*v`, then lifted with
+  `y = sqrt(1-r*r)`. This covers the complete upper hemisphere and is cosine-weighted in
+  solid angle;
+- directions sample `thetaH` and `phiH` uniformly. Given `thetaH`, an inverse CDF draws `phiD`
+  with density proportional to its analytic `thetaDMaximum`, then `thetaD` is uniform on that
+  conditional interval. This is joint-uniform over the valid `(thetaD, phiD)` angular domain
+  and keeps both directions at `y >= 1e-3` without rejection;
 - the optimization loss is `L1` in the cube-root domain `3 * (x^(1/3) - 1)` with a `1e-6` floor,
   weighted `0.5/0.5` across the two heads;
 - the acceptance metric is the bounded safe-log `L1` of both heads, kept separate from the
@@ -139,16 +145,22 @@ against the FP32 master, the FP16 CoopVec mirror, and the zero baseline. Publica
 unless the host quality gate accepts finite/non-negative output, the safe-log EMA thresholds,
 both per-stratum mean/P95 improvements, and the FP16-to-FP32 loss ratio.
 
+The normal and direction sampling distributions are part of the training profile. Checkpoint
+version 5 rejects snapshots created before full-unit-disk normal sampling and uniform-`theta_h`
+conditional-CDF direction sampling, preventing a resumed run from silently mixing profiles.
+
 The full held-out report is logged whether the gate passes or fails, and every checkpoint save
 logs the current step, EMA, learning rate, and training loss. A pass-only failure log would
 leave a successful run unmeasurable, and the checkpoint interval already provides a 512-step
 loss curve without an extra readback.
 
-The production budget is 16,384 steps at batch 64 (1,048,576 samples). A completed LLVM Debug
-run starts at an EMA safe-log loss of about 0.30 and reaches its floor near step 4,096; the
-former 131,072-step budget spent 97% of its time on a plateau. The absolute EMA bound stays at
-the V2 value of 0.025. The relative improvement and FP16-versus-FP32 budgets are scale free and
-also keep their V2 values.
+The production budget is 16,384 steps at batch 64 (1,048,576 samples). The numerical convergence
+and multi-seed measurements below were collected with the superseded independent square-slope
+normal distribution and remain historical until the full-unit-disk profile is retrained. That
+completed LLVM Debug run starts at an EMA safe-log loss of about 0.30 and reaches its floor near
+step 4,096; the former 131,072-step budget spent 97% of its time on a plateau. The absolute EMA
+bound stays at the V2 value of 0.025. The relative improvement and FP16-versus-FP32 budgets are
+scale free and also keep their V2 values.
 
 Every run carries a `trainingSeed` that perturbs both the initial weights and the whole sample
 sequence, and it is persisted in the checkpoint so a resumed run continues the same stream.
@@ -158,7 +170,7 @@ Gradients are clipped per element to `kGradientClip` after batch normalization, 
 independent of the batch size. Measured over eight seeds this lowers the held-out mean by 2.3%,
 the 95th percentile by 6.6%, and the run-to-run standard deviation by 15%.
 
-## Measured Training Behaviour
+## Historical Square-Slope Training Behaviour
 
 Eight seeds at the production configuration, reported by the held-out overall stratum:
 
@@ -222,6 +234,8 @@ constant both lobes must decode to under a zero-filled model, the invariant that
 column equals the amplified absolute difference of the two columns to its left, and the analytic
 `1/pi` upper bound that separates the projected diffuse row from the specular row. Swapping the
 two rows fails the last check, so the contract has demonstrated discriminating power.
+The same registered GPU test dispatches `modelContract.slang` and reads back all contract flags;
+its seeded-fixture check reconstructs the expected unit-disk normal from random lanes 5 and 6.
 
 ## V3 Artifact
 
@@ -247,6 +261,10 @@ renderer consumes a `.nart` in this generation; the artifact is the trainer's pu
 format for the next integration stage.
 
 ## Verification Status
+
+The full-training records in this section predate full-unit-disk normal sampling. They do not
+qualify a newly published artifact for the current training profile; the end-to-end training and
+held-out gate must be rerun before publication.
 
 - `cmake --build --preset debug` completes with the LLVM toolchain.
 - `ctest --preset debug --output-on-failure` passes all 62 tests, including the V3 shader

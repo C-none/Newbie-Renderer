@@ -7,74 +7,44 @@ namespace
 {
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeUploadOwnershipPlan(const nr::rhi::Device &device)
 {
-    auto const transferFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsFamily = device.queueManager.graphics().queueFamilyIndex();
-
-    return nr::rhi::ops::BufferUploadOwnershipPlan{
-        .releaseToDestination =
-            nr::rhi::ops::makeQueueOwnershipTransfer(transferFamily, graphicsFamily,
-                                                     nr::rhi::ops::QueueAccessScope{
-                                                         .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                         .access = vk::AccessFlagBits2::eTransferWrite,
-                                                     },
-                                                     nr::rhi::ops::QueueAccessScope{
-                                                         .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                         .access = vk::AccessFlagBits2::eTransferRead,
-                                                     }),
-    };
+    auto const queueFamilies = device.queueManager.familyIndices();
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.graphics,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eTransfer,
+                                                             .access = vk::AccessFlagBits2::eTransferRead,
+                                                         });
 }
 
 void acquireUploadedBufferOnGraphics(nr::rhi::Device &device, const nr::rhi::ops::BufferUploadTicket &ticket)
 {
-    auto commandPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.graphics().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1);
-    auto const &commandBuffer = commandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    device.uploadReadback().recordAcquireBarrier(commandBuffer, ticket);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addWait(device.uploadReadback().uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
-                  ticket.signalValue);
-    batch.addCommandBuffer(commandBuffer);
-
-    device.queueManager.graphics().submit(std::move(batch));
-    device.queueManager.graphics().waitIdle();
+    nr::rhi::submitOneShot(device.device, device.queueManager.graphics(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *device.uploadReadback().uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eAllCommands,
+                               .waitValue = ticket.signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               device.uploadReadback().recordAcquireBarrier(commandBuffer, ticket);
+                           });
 }
 
 void acquireUploadedImageOnGraphics(nr::rhi::Device &device, nr::rhi::ops::UploadReadbackContext &uploadReadback,
                                     const nr::rhi::ops::ImageUploadTicket &ticket)
 {
-    auto commandPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.graphics().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1);
-    auto const &commandBuffer = commandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    uploadReadback.recordImageAcquireBarrier(commandBuffer, ticket);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addWait(uploadReadback.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eAllCommands,
-                  ticket.signalValue);
-    batch.addCommandBuffer(commandBuffer);
-
-    device.queueManager.graphics().submit(std::move(batch));
-    device.queueManager.graphics().waitIdle();
+    nr::rhi::submitOneShot(device.device, device.queueManager.graphics(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *uploadReadback.uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eAllCommands,
+                               .waitValue = ticket.signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               uploadReadback.recordImageAcquireBarrier(commandBuffer, ticket);
+                           });
 }
 
 const nr::test::CaseRegistrar roundtripCase{
     "rhi upload/readback buffer roundtrip preserves bytes across transfer and graphics queues", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_upload_readback_buffer_roundtrip_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_upload_readback_buffer_roundtrip_test", "NewbieRenderer");
 
         auto payload = std::array<std::uint32_t, 8>{
             0x10203040u, 0x55667788u, 0x90ABCDEFu, 0x00000000u, 0xFFFFFFFFu, 0x12345678u, 0xCAFEBABEu, 0x0BADF00Du,
@@ -124,8 +94,7 @@ const nr::test::CaseRegistrar chunkedImageRoundtripCase{
         constexpr auto height = std::uint32_t{8u};
         constexpr auto bytesPerPixel = std::size_t{8u};
 
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_upload_readback_chunked_image_roundtrip_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_upload_readback_chunked_image_roundtrip_test", "NewbieRenderer");
 
         auto uploadReadback = nr::rhi::ops::UploadReadbackContext{
             device.device, device.resourceFactory, device.queueManager, device.queueFamilyTransferPolicy(), 256u, 2048u,
@@ -191,8 +160,7 @@ const nr::test::CaseRegistrar chunkedImageRoundtripCase{
 
 const nr::test::CaseRegistrar deferredReadbackConsumptionCase{
     "rhi readback ring preserves an unread result before reusing its full capacity", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_deferred_readback_consumption_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_deferred_readback_consumption_test", "NewbieRenderer");
 
         constexpr auto payloadA = std::array<std::uint32_t, 8>{
             0x01020304u, 0x11121314u, 0x21222324u, 0x31323334u,

@@ -34,24 +34,15 @@ export namespace nr::rhi
  * Owns the VMA allocator instance and per-frame linear pools for O(1) bulk deallocation.
  *
  * Lifecycle:
- * - Constructed after vk::raii::Device creation
- * - Initialized by Device::initialize() before ResourcePool
+ * - Constructed by Device after vk::raii::Device creation
  * - Must be destroyed before vk::raii::Device (reverse member order handles this)
  * - resetFramePool() called each frame after fence signal
  */
 class MemoryAllocator
 {
   public:
-    MemoryAllocator() = default;
-
-    // Move-only
-    MemoryAllocator(const MemoryAllocator &) = delete;
-    MemoryAllocator &operator=(const MemoryAllocator &) = delete;
-    MemoryAllocator(MemoryAllocator &&) noexcept = default;
-    MemoryAllocator &operator=(MemoryAllocator &&) noexcept = default;
-
     /**
-     * @brief Initialize the memory allocator and create internal pools
+     * @brief Construct the memory allocator and create internal pools
      *
      * @param instance    Vulkan RAII instance
      * @param physDevice  Vulkan RAII physical device
@@ -59,8 +50,14 @@ class MemoryAllocator
      *
      * Creates the VMA allocator and one linear pool per frame in flight.
      */
-    void initialize(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
+    MemoryAllocator(const vk::raii::Instance &instance, const vk::raii::PhysicalDevice &physDevice,
                     const vk::raii::Device &device);
+
+    // Move-only
+    MemoryAllocator(const MemoryAllocator &) = delete;
+    MemoryAllocator &operator=(const MemoryAllocator &) = delete;
+    MemoryAllocator(MemoryAllocator &&) noexcept = default;
+    MemoryAllocator &operator=(MemoryAllocator &&) noexcept = default;
 
     // =====================================================================
     // Strategy-Based Buffer Allocation
@@ -201,7 +198,7 @@ class MemoryAllocator
     // all buffer allocations suppress buffer-specific dedicated-allocation metadata.
     // GpuOnly CrossFrame buffers also route through profilerSafePool_ to keep the
     // original profiling placement policy.
-    bool nsightProfilerActive_ = false;
+    bool nsightProfilerActive_;
     VmaPoolHandle profilerSafePool_;
 };
 

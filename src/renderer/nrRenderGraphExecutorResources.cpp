@@ -448,13 +448,13 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
 {
     if (queue == QueueDomain::Graphics)
     {
-        return static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Graphics>());
+        return frame.preparedSecondaryWorkers<nr::rhi::QueueRole::Graphics>();
     }
     if (queue == QueueDomain::Compute)
     {
-        return static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Compute>());
+        return frame.preparedSecondaryWorkers<nr::rhi::QueueRole::Compute>();
     }
-    return static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Transfer>());
+    return frame.preparedSecondaryWorkers<nr::rhi::QueueRole::Transfer>();
 }
 
 [[nodiscard]] std::uint32_t RenderGraphExecutor::preparedRecordWorkerCountForQueue(nr::rhi::FrameContext &frame,
@@ -472,9 +472,9 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
 [[nodiscard]] std::uint32_t RenderGraphExecutor::resolvedRecordWorkerCount(nr::rhi::FrameContext &frame)
 {
     auto preparedPoolSlots = std::max({
-        static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Graphics>()),
-        static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Compute>()),
-        static_cast<std::uint32_t>(frame.registeredThreads<nr::rhi::QueueRole::Transfer>()),
+        frame.preparedSecondaryWorkers<nr::rhi::QueueRole::Graphics>(),
+        frame.preparedSecondaryWorkers<nr::rhi::QueueRole::Compute>(),
+        frame.preparedSecondaryWorkers<nr::rhi::QueueRole::Transfer>(),
     });
     nrAssert(preparedPoolSlots > detail::kWorkerSecondaryPoolSlotBase,
              "RenderGraphExecutor requires at least one worker-only secondary command pool beyond the main-thread slot "
@@ -504,7 +504,7 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
         cached.queue = queue;
         auto &frame = context.device.frameManager.current();
         auto &pool = primaryPoolForQueue(frame, queue);
-        cached.buffers = pool.allocatePrimary(1);
+        cached.buffers = pool.allocate<vk::CommandBufferLevel::ePrimary>(1);
     }
 
     nrAssert(!cached.buffers.empty(), "RenderGraphExecutor cached command buffer allocation failed.");
@@ -545,7 +545,7 @@ void RenderGraphExecutor::resolveSwapchainRuntimeResources(const CompiledGraphFr
         cached.secondaryPoolSlot = secondaryPoolSlot;
         auto &frame = context.device.frameManager.current();
         auto &pool = secondaryPoolForQueue(frame, queue, secondaryPoolSlot);
-        cached.buffers = pool.allocateSecondary(1);
+        cached.buffers = pool.allocate<vk::CommandBufferLevel::eSecondary>(1);
     }
 
     nrAssert(!cached.buffers.empty(), "RenderGraphExecutor cached secondary command buffer allocation failed.");

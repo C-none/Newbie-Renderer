@@ -787,28 +787,15 @@ SlangProgramVariantDesc &SlangProgramVariantDesc::assign(std::string_view name, 
 
     sampler.sampler_ = vk::raii::Sampler(device, samplerInfo);
     sampler.debugName_ = std::string(debugName);
-    if constexpr (gpuDebugNamesEnabled)
+    try
     {
-        if (!sampler.debugName_.empty())
-        {
-            vk::DebugUtilsObjectNameInfoEXT objectNameInfo{};
-            objectNameInfo.objectType = vk::ObjectType::eSampler;
-            const auto rawHandle = *sampler.sampler_;
-            static_assert(sizeof(rawHandle) == sizeof(std::uint64_t),
-                          "vk::Sampler handle size must match std::uint64_t for debug naming.");
-            objectNameInfo.objectHandle = std::bit_cast<std::uint64_t>(rawHandle);
-            objectNameInfo.pObjectName = sampler.debugName_.c_str();
-            try
-            {
-                device.setDebugUtilsObjectNameEXT(objectNameInfo);
-            }
-            catch (const vk::SystemError &error)
-            {
-                nrLog<LogLevel::warning>("SlangSampler::create failed to set debug name '{}': {}", sampler.debugName_,
-                                        error.what());
-                nrAssert(false, "SlangSampler::create failed to set a Vulkan debug object name.");
-            }
-        }
+        setDebugObjectName<vk::ObjectType::eSampler>(device, sampler.sampler_, sampler.debugName_);
+    }
+    catch (const vk::SystemError &error)
+    {
+        nrLog<LogLevel::warning>("SlangSampler::create failed to set debug name '{}': {}", sampler.debugName_,
+                                 error.what());
+        nrAssert(false, "SlangSampler::create failed to set a Vulkan debug object name.");
     }
     return sampler;
 }

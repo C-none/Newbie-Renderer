@@ -5,11 +5,12 @@ implementing common;
 // compile-time policy without adding another MaterialCHS generic dimension.
 public extern static const bool kEnableFilterAfterShading;
 
-// One material CHS can read eleven texture semantics. Three 4D packets reserve
-// twelve scalar dimensions so optional layer branches never shift the mapping:
+// One material CHS can read fourteen texture semantics. Four 4D packets reserve
+// sixteen scalar dimensions so optional layer branches never shift the mapping:
 //   packet 0: baseColor, metallicRoughness, emissive, base normal
 //   packet 1: anisotropy, clearcoat, clearcoat roughness, clearcoat normal
 //   packet 2: sheen color, sheen roughness, transmission, padding
+//   packet 3: occlusion, specular, specular color, padding
 public bool selectStochasticFilterUpperTap(float upperWeight, inout float uniformValue)
 {
     if (upperWeight <= 0.0f)

@@ -24,11 +24,6 @@ float3 neuralAppearanceQualityMap(float3 value)
     return nonNegative / (float3(1.0f) + nonNegative);
 }
 
-float3 neuralAppearanceQualitySafeLog(float3 value)
-{
-    return log(float3(1.0f) + max(value, float3(0.0f)));
-}
-
 float neuralAppearanceQualityRgbMean(float3 value)
 {
     return dot(value, float3(1.0f / 3.0f));

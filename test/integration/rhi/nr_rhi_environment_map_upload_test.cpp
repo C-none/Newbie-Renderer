@@ -9,43 +9,26 @@ namespace
 {
 [[nodiscard]] nr::rhi::ops::BufferUploadOwnershipPlan makeEnvironmentUploadPlan(const nr::rhi::Device &device)
 {
-    auto const transferFamily = device.queueManager.transfer().queueFamilyIndex();
-    auto const graphicsFamily = device.queueManager.graphics().queueFamilyIndex();
-    return nr::rhi::ops::BufferUploadOwnershipPlan{
-        .releaseToDestination =
-            nr::rhi::ops::makeQueueOwnershipTransfer(transferFamily, graphicsFamily,
-                                                     nr::rhi::ops::QueueAccessScope{
-                                                         .stages = vk::PipelineStageFlagBits2::eTransfer,
-                                                         .access = vk::AccessFlagBits2::eTransferWrite,
-                                                     },
-                                                     nr::rhi::ops::QueueAccessScope{
-                                                         .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                                                         .access = vk::AccessFlagBits2::eShaderSampledRead,
-                                                     }),
-    };
+    auto const queueFamilies = device.queueManager.familyIndices();
+    return nr::rhi::ops::makeTransferUploadOwnershipPlan(queueFamilies.transfer, queueFamilies.graphics,
+                                                         nr::rhi::ops::QueueAccessScope{
+                                                             .stages = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+                                                             .access = vk::AccessFlagBits2::eShaderSampledRead,
+                                                         });
 }
 
 void acquireEnvironmentOnGraphics(nr::rhi::Device &device, const nr::rhi::ops::ImageUploadTicket &ticket)
 {
     auto &uploadReadback = device.uploadReadback();
-    auto commandPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.graphics().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1);
-    auto const &commandBuffer = commandBuffers.front();
-
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    uploadReadback.recordImageAcquireBarrier(commandBuffer, ticket);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addWait(uploadReadback.uploadTimelineSemaphore(), vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
-                  ticket.signalValue);
-    batch.addCommandBuffer(commandBuffer);
-    device.queueManager.graphics().submit(std::move(batch));
-    device.queueManager.graphics().waitIdle();
+    nr::rhi::submitOneShot(device.device, device.queueManager.graphics(),
+                           nr::rhi::OneShotSyncPlan{
+                               .waitSemaphore = *uploadReadback.uploadTimelineSemaphore(),
+                               .waitStage = vk::PipelineStageFlagBits2::eRayTracingShaderKHR,
+                               .waitValue = ticket.signalValue,
+                           },
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               uploadReadback.recordImageAcquireBarrier(commandBuffer, ticket);
+                           });
 }
 
 [[nodiscard]] std::vector<std::byte> readbackEnvironmentTexel(nr::rhi::Device &device, const nr::rhi::Image &image,
@@ -97,8 +80,7 @@ const nr::test::CaseRegistrar defaultEnvironmentUploadCase{
                           "default environment CPU payload should be RGBA16F");
         nr::test::requireEqual(texture.levels.front().bytes.size(), std::size_t{256u * 1024u * 1024u});
 
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_rhi_environment_map_upload_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_rhi_environment_map_upload_test", "NewbieRenderer");
 
         auto imageInfo =
             nr::rhi::makeImageCreateInfo(texture.format, vk::Extent2D{texture.width, texture.height},

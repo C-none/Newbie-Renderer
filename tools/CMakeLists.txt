@@ -18,4 +18,5 @@ file(GENERATE
     TARGET nr_shader_compile_check
 )
 
+add_subdirectory(coopVecBench)
 add_subdirectory(neuralMaterialViewer)

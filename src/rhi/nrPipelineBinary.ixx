@@ -59,8 +59,8 @@ class PipelineBinaryStore
     void releaseCapturedData(vk::Pipeline pipeline) const noexcept;
 
     std::reference_wrapper<const vk::raii::Device> device_;
-    std::filesystem::path root_{};
-    vk::PipelineBinaryKeyKHR globalKey_{};
+    std::filesystem::path root_;
+    vk::PipelineBinaryKeyKHR globalKey_;
     std::atomic_uint64_t acceptedLoadCount_ = 0u;
     std::atomic_uint64_t persistedCaptureCount_ = 0u;
     mutable std::mutex fileMutex_{};

@@ -156,21 +156,6 @@ struct TlasBuildRecordInfo
 
 namespace nr::rhi::detail
 {
-struct ValidationResult
-{
-    bool isValid = false;
-    std::string message{};
-};
-
-[[nodiscard]] ValidationResult validationSuccess();
-
-[[nodiscard]] ValidationResult validationFailure(std::string message);
-
-template <typename... Args> [[nodiscard]] inline std::string formatMessage(std::string_view format, const Args &...args)
-{
-    return std::vformat(format, std::make_format_args(args...));
-}
-
 [[nodiscard]] bool hasBuildFlag(vk::BuildAccelerationStructureFlagsKHR flags,
                                 vk::BuildAccelerationStructureFlagBitsKHR bit);
 

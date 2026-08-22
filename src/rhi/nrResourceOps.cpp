@@ -168,6 +168,20 @@ constexpr vk::DeviceSize kRingAllocationAlignment = 16u;
     return transfer;
 }
 
+[[nodiscard]] BufferUploadOwnershipPlan
+makeTransferUploadOwnershipPlan(std::uint32_t transferQueueFamilyIndex, std::uint32_t dstQueueFamilyIndex,
+                                const QueueAccessScope &acquireScope)
+{
+    return BufferUploadOwnershipPlan{
+        .releaseToDestination = makeQueueOwnershipTransfer(transferQueueFamilyIndex, dstQueueFamilyIndex,
+                                                           QueueAccessScope{
+                                                               .stages = vk::PipelineStageFlagBits2::eTransfer,
+                                                               .access = vk::AccessFlagBits2::eTransferWrite,
+                                                           },
+                                                           acquireScope),
+    };
+}
+
 [[nodiscard]] bool BufferUploadOwnershipPlan::isSameQueueFamily() const noexcept
 {
     return !acquireToTransfer.has_value() &&
@@ -694,10 +708,10 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             },
             allocation.offset);
 
-        auto commandBuffers = transferPool_.allocatePrimary(1);
+        auto commandBuffers = transferPool_.allocate<vk::CommandBufferLevel::ePrimary>(1);
         auto &commandBuffer = commandBuffers.front();
 
-        CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
         {
             if (uploadedSize == 0 && control.ownership.has_value() &&
                 control.ownership->get().acquireToTransfer.has_value() && !control.omitAcquireToTransferOwnership)
@@ -746,7 +760,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                 }
             }
         }
-        CommandRecorder::end(commandBuffer);
+        commandBuffer.end();
 
         auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
         if (uploadedSize == 0 && control.ownership.has_value() &&
@@ -835,9 +849,9 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             data.subspan(static_cast<std::size_t>(chunk.sourceOffset), static_cast<std::size_t>(chunk.byteSize)),
             allocation.offset);
 
-        auto commandBuffers = transferPool_.allocatePrimary(1);
+        auto commandBuffers = transferPool_.allocate<vk::CommandBufferLevel::ePrimary>(1);
         auto &commandBuffer = commandBuffers.front();
-        CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+        commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
         auto const isFirstChunk = chunkIndex == 0u;
         auto const isLastChunk = chunkIndex + 1u == chunks.size();
@@ -917,7 +931,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
             }
             pipelineBarrier(commandBuffer, releaseBarrier);
         }
-        CommandRecorder::end(commandBuffer);
+        commandBuffer.end();
 
         auto acquireToTransferWait = std::optional<std::reference_wrapper<const QueueOwnershipTransfer>>{};
         if (isFirstChunk && ownership.acquireToTransfer.has_value())
@@ -959,9 +973,9 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
 
     auto allocation = reserveReadback(size);
 
-    auto commandBuffers = readbackPool.allocatePrimary(1);
+    auto commandBuffers = readbackPool.allocate<vk::CommandBufferLevel::ePrimary>(1);
     auto &commandBuffer = commandBuffers.front();
-    CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     {
         BarrierBatch preCopyBarrier{};
         preCopyBarrier.add(makeBufferBarrier(src, vk::BufferMemoryBarrier2{
@@ -1003,7 +1017,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                                                    }));
         pipelineBarrier(commandBuffer, postCopyBarrier);
     }
-    CommandRecorder::end(commandBuffer);
+    commandBuffer.end();
 
     const auto signalValue = submitReadbackCommandBuffers(readbackQueue, std::move(commandBuffers), allocation);
     return ReadbackTicket{*this, allocation.offset, size, signalValue};
@@ -1039,9 +1053,9 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
         layers.aspectMask, layers.mipLevel, 1u, layers.baseArrayLayer, layers.layerCount,
     };
 
-    auto commandBuffers = readbackPool.allocatePrimary(1);
+    auto commandBuffers = readbackPool.allocate<vk::CommandBufferLevel::ePrimary>(1);
     auto &commandBuffer = commandBuffers.front();
-    CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    commandBuffer.begin(vk::CommandBufferBeginInfo{vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     {
         BarrierBatch preCopyBarrier{};
         preCopyBarrier.add(makeImageBarrier(src, vk::ImageMemoryBarrier2{
@@ -1083,7 +1097,7 @@ void UploadReadbackContext::recordImageAcquireBarrier(const vk::raii::CommandBuf
                                                  }));
         pipelineBarrier(commandBuffer, restoreBarrier);
     }
-    CommandRecorder::end(commandBuffer);
+    commandBuffer.end();
 
     const auto signalValue = submitReadbackCommandBuffers(readbackQueue, std::move(commandBuffers), allocation);
     return ReadbackTicket{*this, allocation.offset, readbackSize, signalValue};
@@ -1313,7 +1327,7 @@ void UploadReadbackContext::recordReadbackRingHostVisibilityBarrier(const vk::ra
 [[nodiscard]] std::uint64_t UploadReadbackContext::queryTimelineValue(
     const vk::raii::Semaphore &timelineSemaphore) const
 {
-    return sync::timelineValue(timelineSemaphore);
+    return timelineSemaphore.getCounterValue();
 }
 
 void UploadReadbackContext::waitTimelineValue(const vk::raii::Semaphore &timelineSemaphore,

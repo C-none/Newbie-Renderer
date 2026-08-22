@@ -99,11 +99,17 @@ enum class MaterialAlphaModeHint : std::uint8_t
     mask,
 };
 
-enum class MaterialWorkflowFlags : std::uint8_t
+struct MaterialSpecularExtensionAsset
 {
-    metallicRoughness = 1 << 0,
-    specularGlossiness = 1 << 1,
-    anisotropy = 1 << 2,
+    float factor = 1.0f;
+    std::array<float, 3> colorFactor{1.0f, 1.0f, 1.0f};
+};
+
+struct MaterialSpecularGlossinessAsset
+{
+    std::array<float, 4> diffuseFactor{1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 3> specularFactor{1.0f, 1.0f, 1.0f};
+    float glossinessFactor = 1.0f;
 };
 
 struct MaterialAsset
@@ -118,9 +124,11 @@ struct MaterialAsset
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
 
-    // Authoring: Specular/Glossiness workflow
-    std::optional<std::array<float, 3>> specularFactor{};
-    std::optional<float> glossinessFactor{};
+    // Authoring: KHR_materials_specular
+    std::optional<MaterialSpecularExtensionAsset> specular{};
+
+    // Authoring: KHR_materials_pbrSpecularGlossiness
+    std::optional<MaterialSpecularGlossinessAsset> specularGlossiness{};
 
     // Authoring: Anisotropy
     std::optional<float> anisotropyFactor{};
@@ -149,8 +157,6 @@ struct MaterialAsset
     // Authoring: Texture bindings
     std::vector<MaterialTextureBinding> textures{};
 
-    // Workflow classification (populated by bridge/loader)
-    MaterialWorkflowFlags workflowFlags = MaterialWorkflowFlags::metallicRoughness;
 };
 
 struct VertexAsset

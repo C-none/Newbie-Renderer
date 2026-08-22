@@ -5,6 +5,7 @@ import dependency.slang;
 import dependency.vulkan;
 import nr.rhi;
 import nr.test;
+import nr.utils;
 
 namespace
 {
@@ -29,6 +30,21 @@ inline constexpr auto kHalfTolerance = 2.0e-3f;
 // constant that the host can predict exactly.
 inline constexpr auto kZeroModelDiffuse = 0.731058579f;
 inline constexpr auto kZeroModelSpecular = 0.999983299f;
+inline constexpr auto kModelContractResultNames = std::array{
+    "material input finite",
+    "encoded latent finite",
+    "spatial prefix finite",
+    "learned frame unit finite",
+    "learned frame cross product",
+    "direction pair 0 cached/recomputed",
+    "direction pair 1 cached/recomputed",
+    "direction pair 2 cached/recomputed",
+    "direction pair 3 cached/recomputed",
+    "preview shading normal finite and nontrivial",
+    "preview anisotropy finite and unit",
+    "seeded material domain and unit-disk normal mapping",
+    "aggregate",
+};
 
 struct NeuralAppearanceViewerPushConstants
 {
@@ -70,6 +86,7 @@ enum class NeuralProgram : std::size_t
     Optimize,
     Quality,
     Viewer,
+    ModelContract,
 };
 
 struct ExpectedDescriptorBinding
@@ -338,6 +355,8 @@ void requireNeuralMaterialContextLayout(const nr::rhi::SlangProgram &program, st
             .sourcePath = std::filesystem::path{"renderer/neuralAppearance/evaluateQuality"}},
         nr::rhi::SlangProgramCompileFileRequest{
             .sourcePath = std::filesystem::path{"renderer/neuralAppearance/viewer"}},
+        nr::rhi::SlangProgramCompileFileRequest{
+            .sourcePath = std::filesystem::path{"test/neuralAppearance/modelContract"}},
     };
     auto programs = shaderService.compileProgramsByFile(requests);
     nr::test::requireEqual(programs.size(), requests.size());
@@ -350,7 +369,7 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
         std::string_view{"initializeTraining"}, std::string_view{"evaluateTargets"},
         std::string_view{"clearCoopGradients"}, std::string_view{"evaluateGradients"},
         std::string_view{"optimizeTraining"},   std::string_view{"evaluateQuality"},
-        std::string_view{"viewer"},
+        std::string_view{"viewer"},             std::string_view{"modelContract"},
     };
     std::ranges::for_each(std::views::iota(std::size_t{0u}, programs.size()),
                           [&](std::size_t index) { requireComputeProgram(programs[index], programNames[index]); });
@@ -362,6 +381,7 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
     auto const &optimize = programs[programIndex(NeuralProgram::Optimize)];
     auto const &quality = programs[programIndex(NeuralProgram::Quality)];
     auto const &viewer = programs[programIndex(NeuralProgram::Viewer)];
+    auto const &modelContract = programs[programIndex(NeuralProgram::ModelContract)];
 
     requireDescriptorBindings(initialize,
                               {{"gTrainingControl", 1u, 0u, vk::DescriptorType::eStorageBuffer},
@@ -403,6 +423,10 @@ void inspectNeuralPrograms(const std::vector<nr::rhi::SlangProgram> &programs)
                                {"gInferenceParameters", 2u, 1u, vk::DescriptorType::eStorageBuffer},
                                {"gTrainingStatus", 2u, 2u, vk::DescriptorType::eStorageBuffer}},
                               "viewer");
+    requireDescriptorBindings(modelContract,
+                              {{"gContractResults", 2u, 0u, vk::DescriptorType::eStorageBuffer},
+                               {"gModelParameters", 2u, 1u, vk::DescriptorType::eStorageBuffer}},
+                              "modelContract");
     requirePushConstant(initialize, "gInitialize", 4u, {{"trainingSeed", 0u}}, "initializeTraining");
     requirePushConstant(target, "gTraining", 12u,
                         {{"trainingStep", 0u}, {"batchSize", 4u}, {"trainingSeed", 8u}}, "evaluateTargets");
@@ -565,6 +589,61 @@ template <typename TBinder>
         .root = std::move(root), .sets = std::move(sets), .writeCache = std::move(writeCache)};
 }
 
+void requireModelSamplingContract(nr::rhi::Device &device,
+                                  nr::rhi::PipelineState<nr::rhi::ComputePipeline> &pipeline)
+{
+    constexpr auto parameterBytes = kParameterChunkCount * sizeof(std::array<float, 4u>);
+    constexpr auto resultBytes = kModelContractResultNames.size() * sizeof(std::uint32_t);
+    auto modelParameters = device.resourceFactory.createBuffer(
+        nr::rhi::makeBufferCreateInfo(parameterBytes, vk::BufferUsageFlagBits::eStorageBuffer),
+        nr::rhi::MemoryUsage::CpuToGpu, "ModelContract.Parameters");
+    auto contractResults = device.resourceFactory.createBuffer(
+        nr::rhi::makeBufferCreateInfo(
+            resultBytes, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc),
+        nr::rhi::MemoryUsage::GpuOnly, "ModelContract.Results");
+    nr::test::require(modelParameters.valid() && contractResults.valid(),
+                      "neural model contract resources should be valid");
+    auto const zeroParameters = std::vector<std::byte>(parameterBytes);
+    modelParameters.writeMappedAndFlush(std::span<const std::byte>{zeroParameters});
+
+    auto bindings = prepareBindings(pipeline, [&](const nr::rhi::ShaderCursor &root) {
+        nr::test::require(root["gModelParameters"].setObject(modelParameters) &&
+                              root["gContractResults"].setObject(contractResults),
+                          "neural model contract resources should bind through reflection");
+    });
+    nr::rhi::submitOneShot(device.device, device.queueManager.compute(), {},
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline.raw());
+                               nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer,
+                                                                             vk::PipelineBindPoint::eCompute,
+                                                                             pipeline.layout, bindings.sets);
+                               commandBuffer.dispatch(1u, 1u, 1u);
+                           });
+
+    auto ticket = device.uploadReadback().readbackBuffer(
+        contractResults, 0u, resultBytes, nr::rhi::QueueRole::Compute,
+        nr::rhi::ops::ReadbackSyncPlan{
+            .preCopy = nr::rhi::ops::ReadbackSyncScope{
+                .stages = vk::PipelineStageFlagBits2::eComputeShader,
+                .access = vk::AccessFlagBits2::eShaderStorageWrite,
+            },
+            .postCopy = nr::rhi::ops::ReadbackSyncScope{
+                .stages = vk::PipelineStageFlagBits2::eComputeShader,
+                .access = vk::AccessFlagBits2::eShaderStorageWrite,
+            },
+        });
+    auto bytes = device.uploadReadback().readbackBytes(ticket);
+    nr::test::requireEqual(bytes.size(), resultBytes);
+
+    auto results = std::array<std::uint32_t, kModelContractResultNames.size()>{};
+    std::memcpy(results.data(), bytes.data(), resultBytes);
+    std::ranges::for_each(std::views::iota(std::size_t{0u}, results.size()), [&](std::size_t resultIndex) {
+        nr::test::require(results[resultIndex] == 1u,
+                          std::format("GPU neural model contract failed: {} (value={})",
+                                      kModelContractResultNames[resultIndex], results[resultIndex]));
+    });
+}
+
 void setViewerPushConstants(PreparedComputeBindings &bindings, const NeuralAppearanceViewerPushConstants &pushConstants)
 {
     bindings.root.beginRecording();
@@ -592,25 +671,20 @@ void recordImageTransitionForStorageWrite(const vk::raii::CommandBuffer &command
     nr::rhi::Device &device, nr::rhi::PipelineState<nr::rhi::ComputePipeline> &pipeline,
     PreparedComputeBindings &bindings, const nr::rhi::Image &output, bool firstUse)
 {
-    auto commandPool = nr::rhi::CommandPool{device.device, device.queueManager.compute().queueFamilyIndex(),
-                                            vk::CommandPoolCreateFlagBits::eTransient};
-    auto commandBuffers = commandPool.allocatePrimary(1u);
-    auto const &commandBuffer = commandBuffers[0];
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    if (firstUse)
-    {
-        recordImageTransitionForStorageWrite(commandBuffer, output);
-    }
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline.raw());
-    nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, vk::PipelineBindPoint::eCompute, pipeline.layout,
-                                                  bindings.sets);
-    nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipeline.layout, bindings.pushConstantSnapshot);
-    commandBuffer.dispatch(kViewerWidth / 8u, kViewerHeight / 8u, 1u);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addCommandBuffer(commandBuffer);
-    device.queueManager.compute().submit(std::move(batch));
+    nr::rhi::submitOneShot(device.device, device.queueManager.compute(), {},
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               if (firstUse)
+                               {
+                                   recordImageTransitionForStorageWrite(commandBuffer, output);
+                               }
+                               commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline.raw());
+                               nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer,
+                                                                             vk::PipelineBindPoint::eCompute,
+                                                                             pipeline.layout, bindings.sets);
+                               nr::rhi::pushConstantsToCommandBuffer(commandBuffer, pipeline.layout,
+                                                                     bindings.pushConstantSnapshot);
+                               commandBuffer.dispatch(kViewerWidth / 8u, kViewerHeight / 8u, 1u);
+                           });
 
     auto ticket = device.uploadReadback().readbackImage(
         output, vk::ImageLayout::eGeneral, nr::rhi::QueueRole::Compute,
@@ -624,7 +698,6 @@ void recordImageTransitionForStorageWrite(const vk::raii::CommandBuffer &command
                            "viewer readback should cover the whole RGBA16F preview");
     auto pixels = std::vector<std::uint16_t>(bytes.size() / 2u);
     std::memcpy(pixels.data(), bytes.data(), bytes.size());
-    device.queueManager.compute().waitIdle();
     return pixels;
 }
 
@@ -733,8 +806,8 @@ void requireComparisonPreviewContract(std::span<const std::uint16_t> pixels)
 
 void requireViewerPixelContract(const std::vector<nr::rhi::SlangProgram> &programs)
 {
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_rhi_neural_appearance_viewer_pixel_contract", "NewbieRenderer", false);
+    auto device = nr::rhi::Device::create("nr_rhi_neural_appearance_viewer_pixel_contract", "NewbieRenderer",
+                                          std::filesystem::path{std::string{nr::psoCacheRoot}}, false);
     auto viewerPipeline = device.pipeline()
                               .createComputePipeline(programs[programIndex(NeuralProgram::Viewer)],
                                                      nr::rhi::ComputePipelineDesc{}, 64u, {}, "neural_viewer_pixel_v3")
@@ -777,11 +850,12 @@ void requireViewerPixelContract(const std::vector<nr::rhi::SlangProgram> &progra
 
 void executeNeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &programs)
 {
-    // This executable probe deliberately creates every production PSO after reflection.
+    // This executable probe deliberately creates every production PSO after reflection,
+    // plus the scalar model/sampling contract used to verify the shared fixture.
     // The full trainer owns BDA-backed TrainingOptimal conversion and its GPU numerical
     // sweep; this contract keeps the seven production shader ABI and PSO gate isolated.
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_rhi_neural_appearance_shader_contract_test", "NewbieRenderer", false);
+    auto device = nr::rhi::Device::create("nr_rhi_neural_appearance_shader_contract_test", "NewbieRenderer",
+                                          std::filesystem::path{std::string{nr::psoCacheRoot}}, false);
     auto initialize = device.pipeline().createComputePipeline(
         programs[programIndex(NeuralProgram::Initialize)], nr::rhi::ComputePipelineDesc{}, 64u, {},
         "neural_initialize_training_v3");
@@ -803,6 +877,9 @@ void executeNeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &pro
     auto viewer = device.pipeline().createComputePipeline(
         programs[programIndex(NeuralProgram::Viewer)], nr::rhi::ComputePipelineDesc{}, 64u, {},
         "neural_viewer_v3");
+    auto modelContract = device.pipeline().createComputePipeline(
+        programs[programIndex(NeuralProgram::ModelContract)], nr::rhi::ComputePipelineDesc{}, 64u, {},
+        "neural_model_contract_v3");
     static_cast<void>(initialize.get());
     static_cast<void>(target.get());
     auto clearState = clear.get();
@@ -810,6 +887,8 @@ void executeNeuralTrainingContract(const std::vector<nr::rhi::SlangProgram> &pro
     static_cast<void>(optimize.get());
     static_cast<void>(quality.get());
     static_cast<void>(viewer.get());
+    auto modelContractState = modelContract.get();
+    requireModelSamplingContract(device, modelContractState);
 
     constexpr auto clearBindingGroupCapacity = std::size_t{64u};
     auto clearBindingGroups = std::vector<std::vector<nr::rhi::ShaderBindingSet>>{};

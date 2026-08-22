@@ -114,9 +114,10 @@ inline constexpr int kKeyE = 'E';
     const nr::rhi::PresentationContext &presentation, float deltaSeconds,
     nr::app::AppCameraCursorTrackingState &cursorTracking, const nr::app::UiCaptureState &captureState) noexcept
 {
-    auto const cursor = presentation.cursorPosition();
-    auto const rotateActive = !captureState.wantsMouse && (presentation.mouseButtonDown(kMouseButtonLeft) ||
-                                                           presentation.mouseButtonDown(kMouseButtonRight));
+    auto const &input = presentation.windowInput();
+    auto const cursor = input.cursorPosition();
+    auto const rotateActive = !captureState.wantsMouse && (input.mouseButtonDown(kMouseButtonLeft) ||
+                                                           input.mouseButtonDown(kMouseButtonRight));
 
     auto cursorDelta = DirectX::XMFLOAT2{0.0f, 0.0f};
     if (rotateActive)
@@ -140,12 +141,12 @@ inline constexpr int kKeyE = 'E';
 
     return nr::renderer::ViewerCameraControlInput{
         .deltaSeconds = sanitizeCameraDeltaSeconds(deltaSeconds),
-        .moveForward = !captureState.wantsKeyboard && presentation.keyDown(kKeyW),
-        .moveBackward = !captureState.wantsKeyboard && presentation.keyDown(kKeyS),
-        .moveLeft = !captureState.wantsKeyboard && presentation.keyDown(kKeyA),
-        .moveRight = !captureState.wantsKeyboard && presentation.keyDown(kKeyD),
-        .moveUp = !captureState.wantsKeyboard && presentation.keyDown(kKeyE),
-        .moveDown = !captureState.wantsKeyboard && presentation.keyDown(kKeyQ),
+        .moveForward = !captureState.wantsKeyboard && input.keyDown(kKeyW),
+        .moveBackward = !captureState.wantsKeyboard && input.keyDown(kKeyS),
+        .moveLeft = !captureState.wantsKeyboard && input.keyDown(kKeyA),
+        .moveRight = !captureState.wantsKeyboard && input.keyDown(kKeyD),
+        .moveUp = !captureState.wantsKeyboard && input.keyDown(kKeyE),
+        .moveDown = !captureState.wantsKeyboard && input.keyDown(kKeyQ),
         .rotateActive = rotateActive,
         .cursorDelta = cursorDelta,
     };

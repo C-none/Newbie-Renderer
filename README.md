@@ -2,26 +2,32 @@
 
 <p align="center">
   <a href="https://c-none.github.io/Newbie-Renderer/">
-    <img src="https://img.shields.io/badge/Showcase%20Page-Newbie%20Renderer-0ea5e9?style=for-the-badge&logo=github&logoColor=white" alt="Open the Newbie-Renderer showcase page" />
-  </a>
-  <a href="https://c-none.github.io/Newbie-Renderer/#features">
-    <img src="https://img.shields.io/badge/Features-Supported-22c55e?style=for-the-badge" alt="Supported features on the showcase page" />
-  </a>
-  <a href="https://c-none.github.io/Newbie-Renderer/#roadmap">
-    <img src="https://img.shields.io/badge/Todo%20List-Roadmap-f59e0b?style=for-the-badge" alt="Todo list on the showcase page" />
+    <img src="docs/web/public/og.png" width="900" alt="Newbie Renderer — Vulkan research renderer for NVIDIA Ada and Blackwell" />
   </a>
 </p>
 
-**Showcase page: <https://c-none.github.io/Newbie-Renderer/>** — supported features, todo list, and a browser EXR tone mapping demo. Direct links: [Features](https://c-none.github.io/Newbie-Renderer/#features) · [Todo List](https://c-none.github.io/Newbie-Renderer/#roadmap) · [EXR Demo](https://c-none.github.io/Newbie-Renderer/#demo). The page source lives in `docs/web` and is deployed by `.github/workflows/deploy-web.yml`.
+<h2 align="center">
+  <a href="https://c-none.github.io/Newbie-Renderer/">Open the interactive single-page showcase →</a>
+</h2>
+
+<p align="center">
+  Real renderer captures · HDR OpenEXR inspector · engineering case studies · architecture · roadmap
+</p>
+
+> [!IMPORTANT]
+> **Supported target: Windows + NVIDIA Ada or Blackwell GPUs only.** Other GPU architectures and operating systems are unsupported.
+
+All public showcase content lives on one page: **<https://c-none.github.io/Newbie-Renderer/>**. Detailed material expands in place; there are no secondary showcase pages. Direct anchors: [captures](https://c-none.github.io/Newbie-Renderer/#gallery) · [capabilities](https://c-none.github.io/Newbie-Renderer/#capabilities) · [architecture](https://c-none.github.io/Newbie-Renderer/#architecture) · [roadmap](https://c-none.github.io/Newbie-Renderer/#roadmap).
 
 ## Introduction
 
-Newbie-Renderer is a research-oriented renderer built around C++26 modules, Slang, and Vulkan. The project is intentionally focused on a narrow target stack for now: Windows, Vulkan, and RTX-class NVIDIA hardware. The goal is not broad compatibility first, but a clean experimental platform for advanced rendering algorithms, modern resource management, and future neural rendering workflows.
+Newbie-Renderer is a source-built research renderer based on C++26 modules, Slang, and Vulkan 1.4. Its default `rtobject` viewer combines scene-driven path tracing, DLSS Ray Reconstruction, a cross-frame multi-queue render graph, and persistent shader/pipeline artifacts. GPU Neural Appearance V3 training and comparison are implemented as a separate experimental track, not yet as a path-tracer material runtime.
 
-The supported feature list and the todo list are maintained on the showcase page: [Features](https://c-none.github.io/Newbie-Renderer/#features) and [Todo List](https://c-none.github.io/Newbie-Renderer/#roadmap). Their source of truth is `docs/web/src/data/project.js`.
+The capability and roadmap copy is maintained on the [single-page showcase](https://c-none.github.io/Newbie-Renderer/#capabilities); its source of truth is `docs/web/src/data/project.js`.
 
 ## Prerequisites
 
+- Windows with an NVIDIA Ada or Blackwell GPU; every other GPU architecture is unsupported
 - MSYS2 CLANG64 tools on `PATH` (`clang`, `clang++`, `clang-scan-deps`, `lld`, `llvm-ar`, `llvm-ranlib`, `llvm-objcopy`, `llvm-strip`, `clangd`, `lldb-dap`, `ninja`); this is the only supported full-project compiler toolchain
 - LLVM Clang++ with `import std;` support for C++26
 - Vulkan SDK 1.4.341 or newer
@@ -71,10 +77,10 @@ Optional boundary-tool compiler:
 
    ```bash
    # Debug
-   ./build/llvm/src/Debug/main.exe
+   ./build/llvm/src/Debug/main.exe --pipeline rtobject
 
    # Release
-   ./build/llvm/src/Release/main.exe
+   ./build/llvm/src/Release/main.exe --pipeline rtobject
    ```
 
 ### Code Format

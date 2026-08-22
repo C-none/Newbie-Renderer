@@ -385,12 +385,12 @@ public struct Pt
 
         float4 scatterRandomValues = path.rng.rand4();
         RandomSequence materialFilterSequence = path.rng;
-        // The largest material CHS reads eleven texture semantics. Reserve
-        // three packets (12 scalar dimensions, one padding lane) after scatter
+        // The largest material CHS reads fourteen texture semantics. Reserve
+        // four packets (16 scalar dimensions, two padding lanes) after scatter
         // for every material segment, including miss, unlit, and FAS-off paths.
         // rand4() evolves five seed keys per packet. This one closed-form jump
-        // is exactly equivalent to discarding the three complete packets.
-        path.rng.advanceThreeRand4Packets();
+        // is exactly equivalent to discarding the four complete packets.
+        path.rng.advanceFourRand4Packets();
         payload = MaterialRayPayload(scatterRandomValues, materialFilterSequence, pathCurrentMediumIor(path),
                                      pathExteriorMediumIor(path));
 

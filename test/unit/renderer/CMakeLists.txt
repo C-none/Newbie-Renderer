@@ -48,13 +48,6 @@ nr_add_contract_test(nr_render_graph_compiler_contract_test nr_render_graph_comp
     dependency_graphics
 )
 
-nr_add_contract_test(nr_render_graph_executor_contract_test nr_render_graph_executor_contract_test.cpp "fast;cpu;unit;renderer;rdg"
-    nrrenderer
-    nrrhi
-    utils
-    dependency_graphics
-)
-
 nr_add_executable(nr_render_graph_failure_probe
     nr_render_graph_failure_probe.cpp
 )

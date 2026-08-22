@@ -25,10 +25,12 @@ public uint verifyMaterialFilterPacketAdvance()
     float4 discarded0 = reference.rand4();
     float4 discarded1 = reference.rand4();
     float4 discarded2 = reference.rand4();
-    advanced.advanceThreeRand4Packets();
+    float4 discarded3 = reference.rand4();
+    advanced.advanceFourRand4Packets();
 
     uint finiteMask =
-        uint(all(isfinite(discarded0))) & uint(all(isfinite(discarded1))) & uint(all(isfinite(discarded2)));
+        uint(all(isfinite(discarded0))) & uint(all(isfinite(discarded1))) & uint(all(isfinite(discarded2))) &
+        uint(all(isfinite(discarded3)));
     return finiteMask & uint(reference.sampleIndex == advanced.sampleIndex) &
            uint(reference.sampleSeed == advanced.sampleSeed);
 }
@@ -79,6 +81,8 @@ void payloadPackingContractMain(uint3 dispatchThreadId: SV_DispatchThreadID)
         safePayloadDirection(float3(1.0f, 2.0f, -1.0f), float3(1.0f, 0.0f, 0.0f)), 0.0f,
         float4(0.125f, 0.25f, 0.5f, 0.75f), 1.0f, 0.2f, float3(0.5f, 1.5f, 2.5f), layers, 1.0f, 1.0f,
         0x50607080u, 0x90abcdefu);
+    material.dielectricF0 = float3(0.0625f, 0.1875f, 0.3125f);
+    material.dielectricF90 = 0.4375f;
 
     ResolvedMaterialScatter scatter = ResolvedMaterialScatter(
         ResolvedMaterialFlag.none, safePayloadDirection(float3(-3.0f, -1.0f, -2.0f), fallbackY), float3(0.0f),
@@ -110,8 +114,15 @@ void payloadPackingContractMain(uint3 dispatchThreadId: SV_DispatchThreadID)
              abs(dot(decodedMaterial.anisotropyTangent, decodedMaterial.anisotropyTangent) - 1.0f) < 1.0e-4f &&
              dot(decodedMaterial.anisotropyTangent, expectedTangent) > 0.999f);
 
-    gContractResults[11] = uint(payloadPairMatches(
-        unpackUnorm2x16ToFloat(rayPayload.resolved.anisotropyStrengthMetallicUnorm2x16), float2(0.0f, 1.0f)));
+    gContractResults[11] = uint(
+        payloadPairMatches(unpackUnorm2x16ToFloat(rayPayload.resolved.anisotropyStrengthMetallicUnorm2x16),
+                           float2(0.0f, 1.0f)) &&
+        payloadPairMatches(unpackUnorm2x16ToFloat(rayPayload.resolved.baseColorRGUnorm2x16), material.baseColor.rg) &&
+        payloadPairMatches(unpackUnorm2x16ToFloat(rayPayload.resolved.baseColorBAUnorm2x16), material.baseColor.ba) &&
+        payloadPairMatches(unpackUnorm2x16ToFloat(rayPayload.resolved.dielectricF0XAndF90Unorm2x16),
+                           float2(material.dielectricF0.x, material.dielectricF90)) &&
+        payloadPairMatches(unpackUnorm2x16ToFloat(rayPayload.resolved.dielectricF0YZUnorm2x16),
+                           material.dielectricF0.yz));
     gContractResults[12] = uint(payloadPairMatches(
         unpackUnorm2x16ToFloat(rayPayload.resolved.roughnessClearcoatUnorm2x16), float2(0.2f, 0.8f)));
     gContractResults[13] = uint(payloadPairMatches(
@@ -135,11 +146,57 @@ void payloadPackingContractMain(uint3 dispatchThreadId: SV_DispatchThreadID)
         rayPayload.hit && decodedMaterial.materialIndex == material.materialIndex &&
         decodedMaterial.instanceMetadataIndex == material.instanceMetadataIndex &&
         decodedMaterial.geometryIndex == material.geometryIndex && all(decodedMaterial.position == material.position) &&
-        all(decodedMaterial.baseColor == material.baseColor) && all(decodedMaterial.emissive == material.emissive) &&
+        all(abs(decodedMaterial.baseColor - material.baseColor) <= float4(unormTolerance)) &&
+        all(abs(decodedMaterial.dielectricF0 - material.dielectricF0) <= float3(unormTolerance)) &&
+        abs(decodedMaterial.dielectricF90 - material.dielectricF90) <= unormTolerance &&
+        all(decodedMaterial.emissive == material.emissive) &&
         decodedMaterial.layers.transmissionIor == material.layers.transmissionIor &&
         decodedMaterial.layers.transmissionMode == RtTransmissionMode.volume &&
         decodedMaterial.incidentMediumIor == 1.25f && decodedMaterial.exteriorMediumIor == 1.75f &&
         all(decodedScatter.diffuseWeight == scatter.diffuseWeight) &&
         all(decodedScatter.specularWeight == scatter.specularWeight) && decodedScatter.etaRatio == scatter.etaRatio);
     gContractResults[18] = verifyMaterialFilterPacketAdvance();
+
+    gContractResults[19] = uint(abs(sheenDirectionalAlbedo(1.0f, 0.1f) - 0.7205024f) < 0.015f);
+    gContractResults[20] = uint(abs(sheenDirectionalAlbedo(0.6f, 0.5f) - 0.2347469f) < 0.015f);
+    gContractResults[21] = uint(abs(sheenDirectionalAlbedo(0.1f, 0.1f) - 0.5218497f) < 0.015f);
+    gContractResults[22] = uint(abs(sheenDirectionalAlbedo(0.045f, 0.1f) - 0.2183071f) < 0.025f);
+
+    ResolvedMaterialPayload zeroIorTransmission;
+    zeroIorTransmission.layerFlags = RtMaterialLayerFlag(9u);
+    zeroIorTransmission.baseColor = float4(1.0f);
+    zeroIorTransmission.roughness = 0.5f;
+    zeroIorTransmission.dielectricF0 = float3(0.25f);
+    zeroIorTransmission.dielectricF90 = 0.5f;
+    zeroIorTransmission.layers.transmission = 1.0f;
+    zeroIorTransmission.layers.transmissionMode = RtTransmissionMode.thin;
+    zeroIorTransmission.layers.transmissionIor = 0.0f;
+
+    BaseSurfaceBsdfLobe<RtMaterialLayerFlag(9u)> transmissiveBase;
+    float3 viewDirection = float3(0.0f, 1.0f, 0.0f);
+    float3 transmissionDirection = -viewDirection;
+    gContractResults[23] = uint(transmissiveBase.hasActiveTransmission(zeroIorTransmission));
+
+    ResolvedMaterialBsdfComponents transmissionEvaluation =
+        transmissiveBase.evaluate(zeroIorTransmission, viewDirection, transmissionDirection);
+    float transmissionPdf = transmissiveBase.pdf(zeroIorTransmission, viewDirection, transmissionDirection);
+    gContractResults[24] = uint(all(isfinite(transmissionEvaluation.specularProjected)) &&
+                                any(transmissionEvaluation.specularProjected > float3(0.0f)) &&
+                                isfinite(transmissionPdf) && transmissionPdf > 0.0f);
+
+    ResolvedMaterialScatter transmissionScatter =
+        transmissiveBase.sample(zeroIorTransmission, viewDirection, float3(0.9f, 0.0f, 0.0f));
+    gContractResults[25] = uint(transmissionScatter.valid &&
+                                transmissionScatter.kind == ResolvedMaterialScatterKind.transmission &&
+                                dot(transmissionScatter.direction, transmissionDirection) > 0.999f &&
+                                transmissionScatter.pdf > 0.0f);
+
+    ResolvedMaterialPayload zeroIorVolume = zeroIorTransmission;
+    zeroIorVolume.layers.transmissionMode = RtTransmissionMode.volume;
+    float volumeDiffuseWeight;
+    float volumeInterfaceWeight;
+    transmissiveBase.selectionWeights(zeroIorVolume, viewDirection, volumeDiffuseWeight, volumeInterfaceWeight);
+    gContractResults[26] = uint(!transmissiveBase.hasActiveTransmission(zeroIorVolume) &&
+                                isfinite(volumeDiffuseWeight) && volumeDiffuseWeight > 0.0f &&
+                                isfinite(volumeInterfaceWeight) && volumeInterfaceWeight > 0.0f);
 }

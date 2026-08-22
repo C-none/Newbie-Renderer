@@ -9,35 +9,6 @@ import std;
 
 namespace nr::rhi
 {
-namespace
-{
-template <std::unsigned_integral T>
-[[nodiscard]] T checkedAdd(T lhs, T rhs, std::string_view context)
-{
-    nrAssert(lhs <= std::numeric_limits<T>::max() - rhs, "{} addition exceeds the destination integer range.", context);
-    return lhs + rhs;
-}
-
-template <std::unsigned_integral T>
-[[nodiscard]] T checkedMultiply(T lhs, T rhs, std::string_view context)
-{
-    nrAssert(rhs == 0 || lhs <= std::numeric_limits<T>::max() / rhs,
-             "{} multiplication exceeds the destination integer range.", context);
-    return lhs * rhs;
-}
-
-template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T alignment, std::string_view context)
-{
-    nrAssert(alignment > 0, "{} requires alignment > 0.", context);
-    const auto remainder = value % alignment;
-    if (remainder == 0)
-    {
-        return value;
-    }
-    return checkedAdd(value, alignment - remainder, context);
-}
-} // namespace
-
 [[nodiscard]] ShaderBindingTableBuildPlan makeShaderBindingTableBuildPlan(const ShaderBindingTableLayoutDesc &desc)
 {
     auto validation = rt_detail::validateShaderBindingTableLayoutDesc(desc);
@@ -53,10 +24,10 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
 
     auto totalSize = vk::DeviceSize{0};
     std::ranges::for_each(sectionPlan, [&](const ShaderBindingTableBuildPlanSection &section) {
-        totalSize = std::max(totalSize, checkedAdd(section.offset, section.size, "SBT section end"));
+        totalSize = std::max(totalSize, nr::checkedAdd(section.offset, section.size, "SBT section end"));
     });
 
-    totalSize = checkedAlignUp(totalSize,
+    totalSize = nr::checkedAlignUp(totalSize,
                                static_cast<vk::DeviceSize>(normalizedDesc.capabilities.shaderGroupBaseAlignment),
                                "SBT total size alignment");
 
@@ -108,10 +79,10 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
 
         auto copyRecord = [&](std::uint32_t recordIndex, std::uint32_t shaderGroupIndex,
                               std::span<const std::uint8_t> recordData) {
-            auto const recordOffset = checkedMultiply(static_cast<vk::DeviceSize>(recordIndex),
+            auto const recordOffset = nr::checkedMultiply(static_cast<vk::DeviceSize>(recordIndex),
                                                       static_cast<vk::DeviceSize>(plannedSection.stride),
                                                       "SBT record offset");
-            auto dstOffset = checkedAdd(plannedSection.offset, recordOffset, "SBT record destination");
+            auto dstOffset = nr::checkedAdd(plannedSection.offset, recordOffset, "SBT record destination");
             auto dstStart = static_cast<std::size_t>(dstOffset);
             nrAssert(dstStart + static_cast<std::size_t>(plan.handleSize) <= tableBytes.size(),
                      "ShaderBindingTable::create destination handle copy range overflow.");
@@ -146,10 +117,10 @@ template <std::unsigned_integral T> [[nodiscard]] T checkedAlignUp(T value, T al
         auto handles = desc.pipeline.shaderGroupHandles(plannedSection.firstGroup, sectionRecordCount);
         auto groupIndices = std::views::iota(std::uint32_t{0}, sectionRecordCount);
         std::ranges::for_each(groupIndices, [&](std::uint32_t groupIndex) {
-            auto const recordOffset = checkedMultiply(static_cast<vk::DeviceSize>(groupIndex),
+            auto const recordOffset = nr::checkedMultiply(static_cast<vk::DeviceSize>(groupIndex),
                                                       static_cast<vk::DeviceSize>(plannedSection.stride),
                                                       "SBT group record offset");
-            auto dstOffset = checkedAdd(plannedSection.offset, recordOffset, "SBT group record destination");
+            auto dstOffset = nr::checkedAdd(plannedSection.offset, recordOffset, "SBT group record destination");
             auto srcOffset = static_cast<std::size_t>(groupIndex) * static_cast<std::size_t>(plan.handleSize);
 
             auto dstStart = static_cast<std::size_t>(dstOffset);
@@ -280,20 +251,6 @@ void traceRays(const vk::raii::CommandBuffer &commandBuffer, const TraceRaysDesc
 
 namespace nr::rhi::rt_detail
 {
-[[nodiscard]] ValidationResult validationSuccess()
-{
-    return ValidationResult{
-        .isValid = true,
-    };
-}
-
-[[nodiscard]] ValidationResult validationFailure(std::string message)
-{
-    return ValidationResult{
-        .message = std::move(message),
-    };
-}
-
 [[nodiscard]] std::uint32_t recordCount(const ShaderBindingTableSectionDesc &section)
 {
     if (!section.records.empty())
@@ -331,13 +288,13 @@ namespace nr::rhi::rt_detail
         return section.stride;
     }
 
-    auto minimumStride = checkedAdd(static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleSize),
+    auto minimumStride = nr::checkedAdd(static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleSize),
                                     static_cast<vk::DeviceSize>(maxRecordDataSize(section)),
                                     "SBT minimum record stride");
     nrAssert(minimumStride <= static_cast<vk::DeviceSize>(std::numeric_limits<std::uint32_t>::max()),
              "SBT record stride exceeds uint32_t range.");
     return static_cast<std::uint32_t>(
-        checkedAlignUp(minimumStride, static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleAlignment),
+        nr::checkedAlignUp(minimumStride, static_cast<vk::DeviceSize>(capabilities.shaderGroupHandleAlignment),
                        "SBT record stride alignment"));
 }
 
@@ -349,13 +306,13 @@ namespace nr::rhi::rt_detail
     const auto sectionRecordCount = recordCount(section);
     if (sectionRecordCount == 0)
     {
-        return validationSuccess();
+        return nr::rhi::detail::validationSuccess();
     }
 
     if (!section.records.empty() && section.groupCount != 0 && section.groupCount != sectionRecordCount)
     {
-        return validationFailure(
-            formatMessage("{} groupCount ({}) must be 0 or match records.size() ({}) when records are provided.", label,
+        return nr::rhi::detail::validationFailure(
+            nr::rhi::detail::formatMessage("{} groupCount ({}) must be 0 or match records.size() ({}) when records are provided.", label,
                           section.groupCount, sectionRecordCount));
     }
 
@@ -363,25 +320,25 @@ namespace nr::rhi::rt_detail
                           static_cast<std::uint64_t>(maxRecordDataSize(section));
     if (requiredStride > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()))
     {
-        return validationFailure(formatMessage("{} record payload makes stride exceed uint32_t range.", label));
+        return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("{} record payload makes stride exceed uint32_t range.", label));
     }
 
     if (effectiveSectionStride < requiredStride)
     {
-        return validationFailure(
-            formatMessage("{} stride ({}) must be >= shaderGroupHandleSize + max record payload ({}).", label,
+        return nr::rhi::detail::validationFailure(
+            nr::rhi::detail::formatMessage("{} stride ({}) must be >= shaderGroupHandleSize + max record payload ({}).", label,
                           effectiveSectionStride, requiredStride));
     }
 
     if ((effectiveSectionStride % capabilities.shaderGroupHandleAlignment) != 0)
     {
-        return validationFailure(formatMessage("{} stride ({}) must be aligned to shaderGroupHandleAlignment ({}).",
+        return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("{} stride ({}) must be aligned to shaderGroupHandleAlignment ({}).",
                                                label, effectiveSectionStride, capabilities.shaderGroupHandleAlignment));
     }
 
     if (effectiveSectionStride > capabilities.maxShaderGroupStride)
     {
-        return validationFailure(formatMessage("{} stride ({}) exceeds maxShaderGroupStride ({}).", label,
+        return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("{} stride ({}) exceeds maxShaderGroupStride ({}).", label,
                                                effectiveSectionStride, capabilities.maxShaderGroupStride));
     }
 
@@ -390,7 +347,7 @@ namespace nr::rhi::rt_detail
         auto groupEnd = static_cast<std::uint64_t>(section.firstGroup) + static_cast<std::uint64_t>(section.groupCount);
         if (groupEnd > static_cast<std::uint64_t>(pipelineGroupCount))
         {
-            return validationFailure(formatMessage("{} group range [{}..{}) exceeds pipeline group count ({}).", label,
+            return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("{} group range [{}..{}) exceeds pipeline group count ({}).", label,
                                                    section.firstGroup, groupEnd, pipelineGroupCount));
         }
     }
@@ -401,17 +358,17 @@ namespace nr::rhi::rt_detail
         });
         if (invalidRecordIt != std::ranges::end(section.records))
         {
-            return validationFailure(formatMessage("{} record group index ({}) exceeds pipeline group count ({}).",
+            return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("{} record group index ({}) exceeds pipeline group count ({}).",
                                                    label, invalidRecordIt->groupIndex, pipelineGroupCount));
         }
     }
 
-    return validationSuccess();
+    return nr::rhi::detail::validationSuccess();
 }
 
 [[nodiscard]] vk::DeviceSize sectionSize(const ShaderBindingTableSectionDesc &section)
 {
-    return checkedMultiply(static_cast<vk::DeviceSize>(recordCount(section)),
+    return nr::checkedMultiply(static_cast<vk::DeviceSize>(recordCount(section)),
                            static_cast<vk::DeviceSize>(section.stride), "SBT section size");
 }
 
@@ -440,12 +397,12 @@ namespace nr::rhi::rt_detail
             return;
         }
 
-        runningOffset = checkedAlignUp(runningOffset,
+        runningOffset = nr::checkedAlignUp(runningOffset,
                                        static_cast<vk::DeviceSize>(desc.capabilities.shaderGroupBaseAlignment),
                                        "SBT section base alignment");
         plannedSection.offset = runningOffset;
         plannedSection.size = sectionSize(source);
-        runningOffset = checkedAdd(runningOffset, plannedSection.size, "SBT accumulated size");
+        runningOffset = nr::checkedAdd(runningOffset, plannedSection.size, "SBT accumulated size");
     });
 
     return sections;
@@ -460,7 +417,7 @@ namespace nr::rhi::rt_detail
     }
 
     vk::StridedDeviceAddressRegionKHR region{};
-    region.deviceAddress = checkedAdd(baseAddress, section.offset, "SBT region device address");
+    region.deviceAddress = nr::checkedAdd(baseAddress, section.offset, "SBT region device address");
     region.stride = section.stride;
     region.size = section.size;
     return region;
@@ -470,7 +427,7 @@ namespace nr::rhi::rt_detail
 {
     if (!desc.pipeline.valid())
     {
-        return validationFailure("ShaderBindingTableBuildDesc requires a valid ray tracing pipeline.");
+        return nr::rhi::detail::validationFailure("ShaderBindingTableBuildDesc requires a valid ray tracing pipeline.");
     }
 
     auto layoutDesc = ShaderBindingTableLayoutDesc{
@@ -489,32 +446,32 @@ namespace nr::rhi::rt_detail
 {
     if (desc.capabilities.shaderGroupHandleSize == 0)
     {
-        return validationFailure("shaderGroupHandleSize must be > 0.");
+        return nr::rhi::detail::validationFailure("shaderGroupHandleSize must be > 0.");
     }
 
     if (desc.capabilities.shaderGroupHandleAlignment == 0)
     {
-        return validationFailure("shaderGroupHandleAlignment must be > 0.");
+        return nr::rhi::detail::validationFailure("shaderGroupHandleAlignment must be > 0.");
     }
 
     if (desc.capabilities.shaderGroupBaseAlignment == 0)
     {
-        return validationFailure("shaderGroupBaseAlignment must be > 0.");
+        return nr::rhi::detail::validationFailure("shaderGroupBaseAlignment must be > 0.");
     }
 
     if (desc.capabilities.maxShaderGroupStride == 0)
     {
-        return validationFailure("maxShaderGroupStride must be > 0.");
+        return nr::rhi::detail::validationFailure("maxShaderGroupStride must be > 0.");
     }
 
     if (desc.pipelineGroupCount == 0)
     {
-        return validationFailure("pipelineGroupCount must be > 0.");
+        return nr::rhi::detail::validationFailure("pipelineGroupCount must be > 0.");
     }
 
-    if (rt_detail::recordCount(desc.raygen) != 1)
+    if (recordCount(desc.raygen) != 1)
     {
-        return validationFailure("raygen section must contain exactly one record so size == stride.");
+        return nr::rhi::detail::validationFailure("raygen section must contain exactly one record so size == stride.");
     }
 
     auto raygen = desc.raygen;
@@ -522,45 +479,45 @@ namespace nr::rhi::rt_detail
     auto hit = desc.hit;
     auto callable = desc.callable;
 
-    raygen.stride = rt_detail::effectiveStride(raygen, desc.capabilities);
-    miss.stride = rt_detail::effectiveStride(miss, desc.capabilities);
-    hit.stride = rt_detail::effectiveStride(hit, desc.capabilities);
-    callable.stride = rt_detail::effectiveStride(callable, desc.capabilities);
+    raygen.stride = effectiveStride(raygen, desc.capabilities);
+    miss.stride = effectiveStride(miss, desc.capabilities);
+    hit.stride = effectiveStride(hit, desc.capabilities);
+    callable.stride = effectiveStride(callable, desc.capabilities);
 
     auto groupCount = desc.pipelineGroupCount;
 
-    auto raygenValidation = rt_detail::validateSection("raygen", raygen, raygen.stride, desc.capabilities, groupCount);
+    auto raygenValidation = validateSection("raygen", raygen, raygen.stride, desc.capabilities, groupCount);
     if (!raygenValidation.isValid)
     {
         return raygenValidation;
     }
 
-    auto missValidation = rt_detail::validateSection("miss", miss, miss.stride, desc.capabilities, groupCount);
+    auto missValidation = validateSection("miss", miss, miss.stride, desc.capabilities, groupCount);
     if (!missValidation.isValid)
     {
         return missValidation;
     }
 
-    auto hitValidation = rt_detail::validateSection("hit", hit, hit.stride, desc.capabilities, groupCount);
+    auto hitValidation = validateSection("hit", hit, hit.stride, desc.capabilities, groupCount);
     if (!hitValidation.isValid)
     {
         return hitValidation;
     }
 
     auto callableValidation =
-        rt_detail::validateSection("callable", callable, callable.stride, desc.capabilities, groupCount);
+        validateSection("callable", callable, callable.stride, desc.capabilities, groupCount);
     if (!callableValidation.isValid)
     {
         return callableValidation;
     }
 
-    auto raygenSize = rt_detail::sectionSize(raygen);
+    auto raygenSize = sectionSize(raygen);
     if (raygenSize != raygen.stride)
     {
-        return validationFailure("raygen section requires size == stride.");
+        return nr::rhi::detail::validationFailure("raygen section requires size == stride.");
     }
 
-    return validationSuccess();
+    return nr::rhi::detail::validationSuccess();
 }
 
 [[nodiscard]] ValidationResult validateTraceRaysDispatch(const TraceRaysDimensions &dimensions,
@@ -568,7 +525,7 @@ namespace nr::rhi::rt_detail
 {
     if (dimensions.width == 0 || dimensions.height == 0 || dimensions.depth == 0)
     {
-        return validationFailure("traceRays dimensions must all be > 0.");
+        return nr::rhi::detail::validationFailure("traceRays dimensions must all be > 0.");
     }
 
     auto dispatchWidth = static_cast<std::uint64_t>(dimensions.width);
@@ -577,31 +534,31 @@ namespace nr::rhi::rt_detail
 
     if (capabilities.maxDispatchDimensions[0] > 0 && dispatchWidth > capabilities.maxDispatchDimensions[0])
     {
-        return validationFailure(formatMessage("traceRays width ({}) exceeds max dispatch width ({}).",
+        return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("traceRays width ({}) exceeds max dispatch width ({}).",
                                                dimensions.width, capabilities.maxDispatchDimensions[0]));
     }
 
     if (capabilities.maxDispatchDimensions[1] > 0 && dispatchHeight > capabilities.maxDispatchDimensions[1])
     {
-        return validationFailure(formatMessage("traceRays height ({}) exceeds max dispatch height ({}).",
+        return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("traceRays height ({}) exceeds max dispatch height ({}).",
                                                dimensions.height, capabilities.maxDispatchDimensions[1]));
     }
 
     if (capabilities.maxDispatchDimensions[2] > 0 && dispatchDepth > capabilities.maxDispatchDimensions[2])
     {
-        return validationFailure(formatMessage("traceRays depth ({}) exceeds max dispatch depth ({}).",
+        return nr::rhi::detail::validationFailure(nr::rhi::detail::formatMessage("traceRays depth ({}) exceeds max dispatch depth ({}).",
                                                dimensions.depth, capabilities.maxDispatchDimensions[2]));
     }
 
     auto invocationCount = dispatchWidth * dispatchHeight * dispatchDepth;
     if (capabilities.maxRayDispatchInvocationCount > 0 && invocationCount > capabilities.maxRayDispatchInvocationCount)
     {
-        return validationFailure(
-            formatMessage("traceRays invocation count ({}) exceeds maxRayDispatchInvocationCount ({}).",
+        return nr::rhi::detail::validationFailure(
+            nr::rhi::detail::formatMessage("traceRays invocation count ({}) exceeds maxRayDispatchInvocationCount ({}).",
                           invocationCount, capabilities.maxRayDispatchInvocationCount));
     }
 
-    return validationSuccess();
+    return nr::rhi::detail::validationSuccess();
 }
 
 } // namespace nr::rhi::rt_detail

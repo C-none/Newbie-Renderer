@@ -1,4 +1,5 @@
 export module nr.rhi:surface;
+import dependency.math;
 import dependency.window;
 import dependency.vulkan;
 import nr.utils;
@@ -12,6 +13,38 @@ struct WindowBounds
     int y = 0;
     int width = 1;
     int height = 1;
+};
+
+/**
+ * @brief Owns GLFW keyboard/mouse/scroll/text input state for one window.
+ *
+ * Registers the window user pointer plus scroll and text callbacks on construction and unregisters them on
+ * destruction. Scroll deltas accumulate between polls; each poll discards offsets not consumed since the
+ * previous poll.
+ */
+class WindowInput
+{
+  public:
+    explicit WindowInput(GLFWwindow *window);
+    WindowInput(const WindowInput &) = delete;
+    WindowInput &operator=(const WindowInput &) = delete;
+    WindowInput(WindowInput &&other) noexcept;
+    WindowInput &operator=(WindowInput &&other) noexcept;
+    ~WindowInput();
+
+    void pollEvents();
+    [[nodiscard]] bool keyDown(int glfwKeyCode) const;
+    [[nodiscard]] bool mouseButtonDown(int glfwMouseButton) const;
+    [[nodiscard]] nr::math::Double2 cursorPosition() const;
+    [[nodiscard]] double consumeVerticalScrollOffset() noexcept;
+    [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints();
+
+  private:
+    void unregisterCallbacks() noexcept;
+
+    GLFWwindow *window_ = nullptr;
+    double verticalScrollOffset_ = 0.0;
+    std::vector<std::uint32_t> textInputCodepoints_{};
 };
 
 struct Surface
@@ -31,6 +64,7 @@ struct Surface
     [[nodiscard]] static GlfwContext &glfwContext();
 
     std::unique_ptr<GLFWwindow, decltype(&glfwDestroyWindow)> handle{nullptr, &glfwDestroyWindow};
+    std::optional<WindowInput> input{};
     vk::Extent2D extent{1920, 1080};
     vk::raii::SurfaceKHR surface = {nullptr};
     Surface() = default;

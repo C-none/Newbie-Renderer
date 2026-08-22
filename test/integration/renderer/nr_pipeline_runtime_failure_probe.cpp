@@ -24,16 +24,14 @@ using Runtime = nr::renderer::PipelineRuntime<nr::rhi::ComputePipeline>;
 
 void probeInvalidHandle()
 {
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_pipeline_runtime_failure_probe.invalid", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_pipeline_runtime_failure_probe.invalid", "NewbieRenderer");
     auto runtime = initializedRuntime(device);
     static_cast<void>(runtime->bindingSetsForFrame({}, 0u));
 }
 
 void probeStaleHandle()
 {
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_pipeline_runtime_failure_probe.stale", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_pipeline_runtime_failure_probe.stale", "NewbieRenderer");
     auto runtime = initializedRuntime(device);
     auto const owner = runtime->passBinding("FailureProbe.Node", 0u);
     runtime->clearBindingSets();
@@ -42,8 +40,7 @@ void probeStaleHandle()
 
 void probeForeignHandle()
 {
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_pipeline_runtime_failure_probe.foreign", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_pipeline_runtime_failure_probe.foreign", "NewbieRenderer");
     auto ownerRuntime = initializedRuntime(device);
     auto otherRuntime = initializedRuntime(device);
     auto const foreignOwner = ownerRuntime->passBinding("FailureProbe.Foreign", 0u);
@@ -87,8 +84,7 @@ void probeMissingRuntime()
 
 void probeColdEmptyPrepare()
 {
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_pipeline_runtime_failure_probe.cold-empty-prepare", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_pipeline_runtime_failure_probe.cold-empty-prepare", "NewbieRenderer");
     withBuildContext(initializedRuntime(device), [](auto &, nr::renderer::NodeBuildContext &buildContext, auto &,
                                                     auto &, auto &, std::shared_ptr<Runtime> runtime) {
         auto pass = nr::renderer::ComputePassBuilder{

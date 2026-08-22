@@ -3,6 +3,7 @@ import common;
 import include.neuralAppearance.fixture;
 import include.neuralAppearance.layout;
 import include.neuralAppearance.model;
+import include.neuralAppearance.trainingSampling;
 
 [[vk::binding(1, 2)]]
 StructuredBuffer<float4> gModelParameters;
@@ -117,13 +118,23 @@ void modelContractMain(uint3 dispatchThreadID: SV_DispatchThreadID)
 
     // A seeded fixture must stay inside the base surface parameter domain the
     // reference evaluator accepts.
-    NeuralAppearanceFixture seeded = neuralAppearanceFixtureSample(0x51ed270bu);
+    static const uint seededFixtureSeed = 0x51ed270bu;
+    NeuralAppearanceFixture seeded = neuralAppearanceFixtureSample(seededFixtureSeed);
+    float normalDiskRadiusSquared = neuralAppearanceTrainingRandom(seededFixtureSeed, 5u);
+    float normalDiskRadius = sqrt(normalDiskRadiusSquared);
+    float normalDiskAngle = kNeuralAppearanceTrainingTwoPi *
+                            neuralAppearanceTrainingRandom(seededFixtureSeed, 6u);
+    float2 normalDisk = normalDiskRadius * float2(cos(normalDiskAngle), sin(normalDiskAngle));
+    float3 expectedShadingNormal = float3(
+        normalDisk.x, sqrt(saturate(1.0f - normalDiskRadiusSquared)), normalDisk.y);
     gContractResults[11] = uint(
         all(seeded.baseColor >= float3(0.0f)) && all(seeded.baseColor <= float3(1.0f)) &&
         seeded.metallic >= 0.0f && seeded.metallic <= 1.0f &&
         seeded.roughness >= kMaterialMinRoughness && seeded.roughness <= 1.0f &&
         seeded.anisotropyStrength >= 0.0f && seeded.anisotropyStrength <= 1.0f &&
         abs(length(seeded.shadingNormal) - 1.0f) <= 2.0e-4f &&
+        seeded.shadingNormal.y >= 0.0f &&
+        all(abs(seeded.shadingNormal - expectedShadingNormal) <= float3(2.0e-4f)) &&
         abs(length(seeded.anisotropyTangent) - 1.0f) <= 2.0e-4f);
 
     bool allPassed = true;

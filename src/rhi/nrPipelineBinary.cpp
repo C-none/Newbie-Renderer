@@ -88,9 +88,8 @@ void logArtifactWarning(std::string_view operation, const std::filesystem::path 
 } // namespace
 
 PipelineBinaryStore::PipelineBinaryStore(const vk::raii::Device &device, std::filesystem::path root)
-    : device_(device), root_(std::move(root))
+    : device_(device), root_(std::move(root)), globalKey_(device.getPipelineKeyKHR(nullptr))
 {
-    globalKey_ = device.getPipelineKeyKHR(nullptr);
     nrAssert(validKey(globalKey_), "VK_KHR_pipeline_binary returned an invalid global pipeline key.");
 }
 

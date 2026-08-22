@@ -10,8 +10,7 @@ int main(int argc, char **argv)
     nr::nrAssert(std::string_view{argv[1]} == "record-undeclared-resource",
                  "nr_render_graph_executor_failure_probe received an unknown scenario.");
 
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_render_graph_executor_failure_probe", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_render_graph_executor_failure_probe", "NewbieRenderer");
     auto buffer = device.resourceFactory.createBuffer(
         nr::rhi::makeBufferCreateInfo(256u, vk::BufferUsageFlagBits::eStorageBuffer), nr::rhi::MemoryUsage::GpuOnly,
         "ExecutorFailureProbe.Buffer");

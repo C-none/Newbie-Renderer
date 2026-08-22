@@ -1,0 +1,73 @@
+diff --git a/code/AssetLib/glTF2/glTF2Importer.cpp b/code/AssetLib/glTF2/glTF2Importer.cpp
+index 2f1b592..fc9bda5 100644
+--- a/code/AssetLib/glTF2/glTF2Importer.cpp
++++ b/code/AssetLib/glTF2/glTF2Importer.cpp
+@@ -287,13 +287,10 @@ static aiMaterial *ImportMaterial(std::vector<int> &embeddedTexIdxs, Asset &r,
+         // KHR_materials_specular
+         if (mat.materialSpecular.isPresent) {
+             MaterialSpecular &specular = mat.materialSpecular.value;
+-            // Default values of zero disables Specular
+-            if (std::memcmp(specular.specularColorFactor, defaultSpecularColorFactor, sizeof(vec3)) != 0 || specular.specularFactor != 0.0f) {
+-                SetMaterialColorProperty(r, specular.specularColorFactor, aimat, AI_MATKEY_COLOR_SPECULAR);
+-                aimat->AddProperty(&specular.specularFactor, 1, AI_MATKEY_SPECULAR_FACTOR);
+-                SetMaterialTextureProperty(embeddedTexIdxs, r, specular.specularTexture, aimat, aiTextureType_SPECULAR, 0);
+-                SetMaterialTextureProperty(embeddedTexIdxs, r, specular.specularColorTexture, aimat, aiTextureType_SPECULAR, 1);
+-            }
++            SetMaterialColorProperty(r, specular.specularColorFactor, aimat, AI_MATKEY_COLOR_SPECULAR);
++            aimat->AddProperty(&specular.specularFactor, 1, AI_MATKEY_SPECULAR_FACTOR);
++            SetMaterialTextureProperty(embeddedTexIdxs, r, specular.specularTexture, aimat, aiTextureType_SPECULAR, 0);
++            SetMaterialTextureProperty(embeddedTexIdxs, r, specular.specularColorTexture, aimat, aiTextureType_SPECULAR, 1);
+         }
+         // pbrSpecularGlossiness
+         else if (mat.pbrSpecularGlossiness.isPresent) {
+diff --git a/code/PostProcessing/ValidateDataStructure.cpp b/code/PostProcessing/ValidateDataStructure.cpp
+--- a/code/PostProcessing/ValidateDataStructure.cpp
++++ b/code/PostProcessing/ValidateDataStructure.cpp
+@@ -499,9 +499,15 @@ void ValidateDSProcess::SearchForInvalidTextures(const aiMaterial *pMaterial,
+ 
+     int iNumIndices = 0;
+     int iIndex = -1;
++    bool hasKhrMaterialsSpecularFactor = false;
+     for (unsigned int i = 0; i < pMaterial->mNumProperties; ++i) {
+         aiMaterialProperty *prop = pMaterial->mProperties[i];
+         ai_assert(nullptr != prop);
++        if (type == aiTextureType_SPECULAR &&
++                !::strcmp(prop->mKey.data, "$mat.specularFactor") &&
++                prop->mSemantic == 0 && prop->mIndex == 0) {
++            hasKhrMaterialsSpecularFactor = true;
++        }
+         if (!::strcmp(prop->mKey.data, "$tex.file") && prop->mSemantic == static_cast<unsigned int>(type)) {
+             iIndex = std::max(iIndex, (int)prop->mIndex);
+             ++iNumIndices;
+@@ -511,14 +517,19 @@ void ValidateDSProcess::SearchForInvalidTextures(const aiMaterial *pMaterial,
+             }
+         }
+     }
+-    if (iIndex + 1 != iNumIndices) {
++    const int textureSlotCount =
++            type == aiTextureType_SPECULAR && hasKhrMaterialsSpecularFactor && iIndex == 1 && iNumIndices == 1
++            ? 2
++            : iNumIndices;
++
++    if (iIndex + 1 != textureSlotCount) {
+         ReportError("%s #%i is set, but there are only %i %s textures",
+                 szType, iIndex, iNumIndices, szType);
+     }
+-    if (!iNumIndices) {
++    if (!textureSlotCount) {
+         return;
+     }
+-    std::vector<aiTextureMapping> mappings(iNumIndices);
++    std::vector<aiTextureMapping> mappings(textureSlotCount);
+ 
+     // Now check whether all UV indices are valid ...
+     bool bNoSpecified = true;
+@@ -528,7 +539,7 @@ void ValidateDSProcess::SearchForInvalidTextures(const aiMaterial *pMaterial,
+             continue;
+         }
+ 
+-        if ((int)prop->mIndex >= iNumIndices) {
++        if ((int)prop->mIndex >= textureSlotCount) {
+             ReportError("Found texture property with index %i, although there "
+                         "are only %i textures of type %s",
+                     prop->mIndex, iNumIndices, szType);

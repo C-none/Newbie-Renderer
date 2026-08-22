@@ -43,7 +43,10 @@ public struct ResolvedMaterialRayPayload
     public uint instanceMetadataIndex = 0xffffffffu;
     public uint geometryIndex = 0xffffffffu;
     public float3 position = float3(0.0f);
-    public float4 baseColor = float4(1.0f);
+    public uint baseColorRGUnorm2x16 = 0xffffffffu;
+    public uint baseColorBAUnorm2x16 = 0xffffffffu;
+    public uint dielectricF0XAndF90Unorm2x16 = 0xffff0a3du;
+    public uint dielectricF0YZUnorm2x16 = 0x0a3d0a3du;
     public float3 emissive = float3(0.0f);
     public float transmissionIor = 1.5f;
     public float3 scatterDiffuseWeight = float3(0.0f);
@@ -77,7 +80,11 @@ public struct ResolvedMaterialRayPayload
         instanceMetadataIndex = material.instanceMetadataIndex;
         geometryIndex = material.geometryIndex;
         position = material.position;
-        baseColor = material.baseColor;
+        baseColorRGUnorm2x16 = packPayloadUnorm2x16(material.baseColor.rg);
+        baseColorBAUnorm2x16 = packPayloadUnorm2x16(material.baseColor.ba);
+        dielectricF0XAndF90Unorm2x16 =
+            packPayloadUnorm2x16(float2(material.dielectricF0.x, material.dielectricF90));
+        dielectricF0YZUnorm2x16 = packPayloadUnorm2x16(material.dielectricF0.yz);
         emissive = material.emissive;
         transmissionIor = material.layers.transmissionIor;
         scatterDiffuseWeight = scatter.diffuseWeight;
@@ -179,10 +186,15 @@ public struct MaterialRayPayload
     public property float4 scatterRandomValues
     {
         get {
-            return resolved.baseColor;
+            return asfloat(uint4(resolved.baseColorRGUnorm2x16, resolved.baseColorBAUnorm2x16,
+                                 resolved.dielectricF0XAndF90Unorm2x16, resolved.dielectricF0YZUnorm2x16));
         }
         set(value) {
-            resolved.baseColor = value;
+            uint4 bits = asuint(value);
+            resolved.baseColorRGUnorm2x16 = bits.x;
+            resolved.baseColorBAUnorm2x16 = bits.y;
+            resolved.dielectricF0XAndF90Unorm2x16 = bits.z;
+            resolved.dielectricF0YZUnorm2x16 = bits.w;
         }
     }
 
@@ -249,6 +261,11 @@ public ResolvedMaterialPayload resolvedMaterialFromRayPayload(MaterialRayPayload
         unpackUnorm2x16ToFloat(payload.resolved.clearcoatRoughnessSheenColorXUnorm2x16);
     float2 sheenColorYZ = unpackUnorm2x16ToFloat(payload.resolved.sheenColorYZUnorm2x16);
     float2 sheenRoughnessTransmission = unpackUnorm2x16ToFloat(payload.resolved.sheenRoughnessTransmissionUnorm2x16);
+    float2 baseColorRG = unpackUnorm2x16ToFloat(payload.resolved.baseColorRGUnorm2x16);
+    float2 baseColorBA = unpackUnorm2x16ToFloat(payload.resolved.baseColorBAUnorm2x16);
+    float2 dielectricF0XAndF90 =
+        unpackUnorm2x16ToFloat(payload.resolved.dielectricF0XAndF90Unorm2x16);
+    float2 dielectricF0YZ = unpackUnorm2x16ToFloat(payload.resolved.dielectricF0YZUnorm2x16);
 
     MaterialLayerStack layers = MaterialLayerStack(
         roughnessClearcoat.y, max(clearcoatRoughnessSheenColorX.x, kMaterialMinRoughness),
@@ -260,12 +277,16 @@ public ResolvedMaterialPayload resolvedMaterialFromRayPayload(MaterialRayPayload
         payload.resolved.transmissionIor);
     // These values remain authoritative in PathState while the ray is in flight. Restoring them at
     // decode preserves direct-light volume evaluation without spending two output payload lanes.
-    return ResolvedMaterialPayload(
+    ResolvedMaterialPayload material = ResolvedMaterialPayload(
         payload.resolved.flags & ResolvedMaterialFlag.materialMask, payload.resolved.materialIndex,
         payload.resolved.instanceMetadataIndex, payload.resolved.geometryIndex, payload.resolved.position,
-        geometryNormal, shadingNormal, anisotropyTangent, anisotropyStrengthMetallic.x, payload.resolved.baseColor,
+        geometryNormal, shadingNormal, anisotropyTangent, anisotropyStrengthMetallic.x,
+        float4(baseColorRG, baseColorBA),
         anisotropyStrengthMetallic.y, max(roughnessClearcoat.x, kMaterialMinRoughness), payload.resolved.emissive,
         layers, incidentMediumIor, exteriorMediumIor);
+    material.dielectricF0 = float3(dielectricF0XAndF90.x, dielectricF0YZ);
+    material.dielectricF90 = dielectricF0XAndF90.y;
+    return material;
 }
 
 public ResolvedMaterialScatter resolvedMaterialScatterFromRayPayload(MaterialRayPayload payload)

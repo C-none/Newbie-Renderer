@@ -168,5 +168,8 @@ const nr::test::CaseRegistrar v3TrainingProfileCase{
         nr::test::require(
             nr::neuralAppearance::v3TrainingProfileText.contains("projected-diffuse-specular"),
             "the profile must record that both reflective base surface lobes are supervised");
+        nr::test::require(
+            nr::neuralAppearance::v3TrainingProfileText.contains("normal-sampling=uniform-unit-disk-lift"),
+            "the profile must record full-unit-disk shading-normal sampling");
     }};
 } // namespace

@@ -9,6 +9,22 @@ This NumPy utility is retained to reproduce the earlier `z4 + d4` fixture, compa
 CPU math, and regenerate its historical checked-in constants. Its output is not loaded by
 or synchronized with the current GPU training state.
 
+## Runtime direction-CDF table
+
+The runtime trainer samples `theta_h` uniformly and uses a checked-in `96 x 96` inverse-CDF
+table to draw `phi_d` with density proportional to `theta_d,max`. Drawing `theta_d`
+conditionally then makes `(theta_d, phi_d)` joint-uniform over the valid Rusinkiewicz angular
+domain. Regenerate and validate the dependency-free Slang constant module from the repository
+root with:
+
+```powershell
+python tools/neuralAppearance/generate_half_vector_cdf.py
+python tools/neuralAppearance/generate_half_vector_cdf.py --check
+```
+
+The logarithmic cosine grid resolves the rapidly changing grazing boundary. The table is a
+shader constant array, not a texture or descriptor-backed runtime resource.
+
 ## Historical workflow
 
 Run from the repository root:

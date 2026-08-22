@@ -1,5 +1,4 @@
 export module nr.rhi:swapchain;
-import dependency.math;
 import dependency.vulkan;
 
 import :surface;
@@ -55,12 +54,8 @@ struct SwapChain
 
     [[nodiscard]] static SwapChain create(const vk::raii::PhysicalDevice &physicalDevice,
                                           const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
-                                          vk::Extent2D surfaceExtent, const SwapChainConfig &config = {});
-
-    [[nodiscard]] static SwapChain recreate(const vk::raii::PhysicalDevice &physicalDevice,
-                                            const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
-                                            vk::Extent2D surfaceExtent, vk::SwapchainKHR oldSwapchain,
-                                            const SwapChainConfig &config = {});
+                                          vk::Extent2D surfaceExtent, const SwapChainConfig &config = {},
+                                          vk::SwapchainKHR oldSwapchain = {});
 
     [[nodiscard]] AcquireResult acquireNextImage(
         const vk::raii::Semaphore &imageAvailable,
@@ -74,11 +69,6 @@ struct SwapChain
     [[nodiscard]] static PresentResult resolvePresentResult(vk::Result queueResult,
                                                             vk::Result swapchainResult) noexcept;
 
-  private:
-    [[nodiscard]] static SwapChain createImpl(const vk::raii::PhysicalDevice &physicalDevice,
-                                              const vk::raii::Device &device, const vk::raii::SurfaceKHR &surface,
-                                              vk::Extent2D surfaceExtent, const SwapChainConfig &config,
-                                              vk::SwapchainKHR oldSwapchain);
 };
 
 class AcquireSemaphorePool
@@ -99,9 +89,14 @@ class PresentationContext
   public:
     using AcquireOutOfDateTestHook = std::function<bool()>;
 
+    explicit PresentationContext(Surface surface);
     ~PresentationContext();
 
-    void createSurface(const vk::raii::Instance &instance, std::string_view appName);
+    PresentationContext(const PresentationContext &) = delete;
+    PresentationContext &operator=(const PresentationContext &) = delete;
+    PresentationContext(PresentationContext &&) = delete;
+    PresentationContext &operator=(PresentationContext &&) = delete;
+
     void initializeSwapchain(const vk::raii::PhysicalDevice &physicalDevice, const vk::raii::Device &device,
                              const SwapChainConfig &config, std::uint32_t presentQueueFamily);
 
@@ -127,12 +122,8 @@ class PresentationContext
     [[nodiscard]] vk::Image swapchainImage(std::uint32_t imageIndex) const;
     [[nodiscard]] vk::ImageView swapchainImageView(std::uint32_t imageIndex) const;
 
-    void pollEvents() const;
-    [[nodiscard]] bool keyDown(int glfwKeyCode) const;
-    [[nodiscard]] bool mouseButtonDown(int glfwMouseButton) const;
-    [[nodiscard]] nr::math::Double2 cursorPosition() const;
-    [[nodiscard]] double consumeVerticalScrollOffset() const noexcept;
-    [[nodiscard]] std::vector<std::uint32_t> consumeTextInputCodepoints() const;
+    [[nodiscard]] WindowInput &windowInput();
+    [[nodiscard]] const WindowInput &windowInput() const;
     [[nodiscard]] bool windowShouldClose() const;
     [[nodiscard]] bool framebufferAvailable() const noexcept;
     [[nodiscard]] bool fullscreenEnabled() const noexcept;
@@ -190,7 +181,5 @@ class PresentationContext
     AcquireSemaphorePool acquirePool_{};
     std::array<std::optional<std::uint32_t>, maxFrameInFlight> borrowedAcquireSlotByFrame_{};
     AcquireOutOfDateTestHook acquireOutOfDateTestHook_{};
-    mutable double verticalScrollOffset_ = 0.0;
-    mutable std::vector<std::uint32_t> textInputCodepoints_{};
 };
 } // namespace nr::rhi

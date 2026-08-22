@@ -18,20 +18,27 @@ constexpr auto payloadPackingResultNames = std::array{
     "transient material-ray aliases",
     "five oct32 field mappings",
     "decoded anisotropy tangent reprojection",
-    "UNORM pair anisotropy/metallic",
+    "UNORM material/specular pairs",
     "UNORM pair roughness/clearcoat",
     "UNORM pair clearcoat roughness/sheen X",
     "UNORM pair sheen Y/Z",
     "UNORM pair sheen roughness/transmission",
     "decoded UNORM field mappings and roughness floor",
-    "full-width payload fields",
+    "remaining payload fields and packed base/specular",
     "material filter packet advance",
+    "Charlie sheen albedo rough grazing",
+    "Charlie sheen albedo medium",
+    "Charlie sheen albedo smooth grazing",
+    "Charlie sheen albedo minimum-roughness transition",
+    "thin IOR-zero transmission activation",
+    "thin IOR-zero transmission evaluation and PDF",
+    "thin IOR-zero transmission sample",
+    "volume IOR-zero rejection preserves diffuse",
 };
 
 void executePayloadPackingContract(const nr::rhi::SlangProgram &program)
 {
-    auto device = nr::rhi::Device{};
-    device.initialize("nr_rhi_fas_shader_contract_test", "NewbieRenderer");
+    auto device = nr::rhi::Device::create("nr_rhi_fas_shader_contract_test", "NewbieRenderer");
 
     auto pipeline = device.pipeline().createComputePipeline(program).get();
     nr::test::require(pipeline.pipeline.valid() && pipeline.layout.valid() && pipeline.descriptorLayout.valid(),
@@ -56,23 +63,14 @@ void executePayloadPackingContract(const nr::rhi::SlangProgram &program)
     nr::rhi::updateResourcesForBindingSnapshot(pipeline.bindingPool, bindingSets, descriptorWriteCache, bindingSnapshot,
                                                {});
 
-    auto commandPool = nr::rhi::CommandPool{
-        device.device,
-        device.queueManager.compute().queueFamilyIndex(),
-        vk::CommandPoolCreateFlagBits::eTransient,
-    };
-    auto commandBuffers = commandPool.allocatePrimary(1);
-    auto const &commandBuffer = commandBuffers.front();
-    nr::rhi::CommandRecorder::beginPrimary(commandBuffer, vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline.raw());
-    nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer, vk::PipelineBindPoint::eCompute, pipeline.layout,
-                                                  bindingSets);
-    commandBuffer.dispatch(1u, 1u, 1u);
-    nr::rhi::CommandRecorder::end(commandBuffer);
-
-    auto batch = nr::rhi::CommandBatch{};
-    batch.addCommandBuffer(commandBuffer);
-    device.queueManager.compute().submit(std::move(batch));
+    nr::rhi::submitOneShot(device.device, device.queueManager.compute(), {},
+                           [&](const vk::raii::CommandBuffer &commandBuffer) {
+                               commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.pipeline.raw());
+                               nr::rhi::bindPreparedResourcesToCommandBuffer(commandBuffer,
+                                                                             vk::PipelineBindPoint::eCompute,
+                                                                             pipeline.layout, bindingSets);
+                               commandBuffer.dispatch(1u, 1u, 1u);
+                           });
 
     auto readbackTicket =
         device.uploadReadback().readbackBuffer(resultBuffer, 0, resultByteSize, nr::rhi::QueueRole::Compute,

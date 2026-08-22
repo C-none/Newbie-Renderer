@@ -83,6 +83,9 @@ public struct ResolvedMaterialPayload
     public float4 baseColor = float4(1.0f);
     public float metallic = 0.0f;
     public float roughness = 1.0f;
+    public float3 dielectricF0 = float3(0.04f);
+    public float dielectricF90 = 1.0f;
+    public float occlusion = 1.0f;
     public float3 emissive = float3(0.0f);
     public MaterialLayerStack layers = MaterialLayerStack();
     public float incidentMediumIor = 1.0f;
@@ -331,7 +334,8 @@ public struct ResolvedMaterialDirectComponents
 
 public MaterialSample materialSampleFromResolvedPayload(ResolvedMaterialPayload payload)
 {
-    return MaterialSample(payload.baseColor, payload.metallic, payload.roughness, payload.emissive, payload.alpha);
+    return MaterialSample(payload.baseColor, payload.metallic, payload.roughness, payload.emissive, payload.alpha,
+                          payload.dielectricF0, payload.dielectricF90, payload.occlusion);
 }
 
 // glTF base color coverage: base color factor x base color texture x vertex color. Shared by unlit
@@ -383,7 +387,7 @@ public ResolvedMaterialPayload resolveUnlitMaterialPayload(StructuredBuffer<RtMa
 public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<let LayerFlags : RtMaterialLayerFlag>(
     StructuredBuffer<RtMaterialTextureRef> textureRefs, StructuredBuffer<RtMaterialLayerRecord> layerRecords,
     RtMaterialHeader material, RtSurfaceData surface, float3 viewDirection, uint materialIndex,
-    RandomSequence filterSequence)
+    RandomSequence filterSequence, bool frontFace, float incidentMediumIor, float exteriorMediumIor)
 {
     RandomSequence localFilterSequence = filterSequence;
     float3 orientedNormal = safeNormalize(surface.normal, viewDirection);
@@ -407,9 +411,34 @@ public ResolvedMaterialPayload resolveLitMaterialPayloadVariant<let LayerFlags :
         layers = sampleMaterialLayersVariant<LayerFlags>(
             textureRefs, layerRecords, material, surface, orientedNormal, filterPacket1.yzw, localFilterSequence);
     }
-    return ResolvedMaterialPayload(materialIndex, LayerFlags, material.alphaMode, surface.position, orientedNormal,
-                                   shadingNormal, anisotropyTangent, anisotropyStrength, core.baseColor, core.metallic,
-                                   core.roughness, core.emissive, layers, 1.0f, 1.0f);
+
+    float interfaceIor = layers.transmissionIor;
+    float targetMediumIor = interfaceIor;
+    if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u &&
+        layers.transmissionMode == RtTransmissionMode.volume && !frontFace)
+    {
+        targetMediumIor = exteriorMediumIor;
+    }
+    float baseDielectricF0 = 1.0f;
+    if (interfaceIor > 0.0f && incidentMediumIor > 0.0f && targetMediumIor > 0.0f)
+    {
+        float denominator = incidentMediumIor + targetMediumIor;
+        float ratio = abs(denominator) > 1.0e-7f ? (targetMediumIor - incidentMediumIor) / denominator : 1.0f;
+        baseDielectricF0 = saturate(ratio * ratio);
+    }
+
+    float4 filterPacket3 = localFilterSequence.rand4();
+    sampleMaterialSpecularAndOcclusionVariant(textureRefs, material, surface, baseDielectricF0, filterPacket3.xyz,
+                                               core);
+
+    ResolvedMaterialPayload resolved = ResolvedMaterialPayload(
+        materialIndex, LayerFlags, material.alphaMode, surface.position, orientedNormal, shadingNormal,
+        anisotropyTangent, anisotropyStrength, core.baseColor, core.metallic, core.roughness, core.emissive, layers,
+        incidentMediumIor, exteriorMediumIor);
+    resolved.dielectricF0 = core.dielectricF0;
+    resolved.dielectricF90 = core.dielectricF90;
+    resolved.occlusion = core.occlusion;
+    return resolved;
 }
 
 public float materialPayloadLuminance(float3 value)
@@ -736,72 +765,51 @@ public static const RtMaterialLayerFlag kResolvedMaterialVariantMask =
     RtMaterialLayerFlag.baseSurface | RtMaterialLayerFlag.clearcoat | RtMaterialLayerFlag.sheen |
     RtMaterialLayerFlag.transmission | RtMaterialLayerFlag.anisotropicBaseLobe;
 
+public float materialPayloadSheenBaseAlbedoScaling(ResolvedMaterialPayload payload, float3 viewDirection,
+                                                    float3 lightDirection)
+{
+    float3 facingGeometryNormal =
+        materialPayloadFacingGeometryNormal(payload.geometryNormal, payload.shadingNormal, viewDirection);
+    float3 sheenNormal = adjustMaterialPayloadSpecularNormal(payload.shadingNormal, facingGeometryNormal, viewDirection);
+    float noV = saturate(dot(sheenNormal, viewDirection));
+    float noL = saturate(dot(sheenNormal, lightDirection));
+    return sheenBaseAlbedoScaling(payload.layers, noV, noL);
+}
+
 // The base surface is one top-level lobe. Diffuse reflection, interface reflection, and optional
 // transmission share one selection distribution so Fresnel/TIR decisions and their measures cannot
 // diverge between evaluate(), pdf(), and sample(). Every transmission-only operation remains in a
 // LayerFlags static block, allowing non-transmission link variants to discard it completely.
 public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
 {
-    public float dielectricInterfaceFresnel(ResolvedMaterialPayload payload, float cosine)
+    public float3 dielectricInterfaceFresnel(ResolvedMaterialPayload payload, float cosine)
     {
-        float dielectric = fresnelSchlick(0.04f, cosine);
-
         if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
         {
-            float interfaceIor = payload.layers.transmissionIor;
-            dielectric = 1.0f;
-            if (interfaceIor > 0.0f)
+            if (payload.layers.transmissionMode == RtTransmissionMode.volume)
             {
-                if (payload.layers.transmissionMode == RtTransmissionMode.volume)
+                float etaI = payload.incidentMediumIor;
+                float etaT = payload.frontFace ? payload.layers.transmissionIor : payload.exteriorMediumIor;
+                if (etaI > 0.0f && etaT > 0.0f)
                 {
-                    float etaI = payload.incidentMediumIor;
-                    float etaT = payload.frontFace ? interfaceIor : payload.exteriorMediumIor;
-                    if (etaI > 0.0f && etaT > 0.0f)
+                    float cosThetaI = saturate(abs(cosine));
+                    float eta = etaI / etaT;
+                    float sinThetaT2 = eta * eta * max(1.0f - cosThetaI * cosThetaI, 0.0f);
+                    if (sinThetaT2 >= 1.0f)
                     {
-                        float cosThetaI = saturate(abs(cosine));
-                        float eta = etaI / etaT;
-                        float sinThetaT2 = eta * eta * max(1.0f - cosThetaI * cosThetaI, 0.0f);
-                        if (sinThetaT2 < 1.0f)
-                        {
-                            float cosThetaT = sqrt(max(1.0f - sinThetaT2, 0.0f));
-                            float parallelNumerator = etaT * cosThetaI - etaI * cosThetaT;
-                            float parallelDenominator = etaT * cosThetaI + etaI * cosThetaT;
-                            float perpendicularNumerator = etaI * cosThetaI - etaT * cosThetaT;
-                            float perpendicularDenominator = etaI * cosThetaI + etaT * cosThetaT;
-                            float parallel = parallelNumerator / max(abs(parallelDenominator), 1.0e-7f);
-                            float perpendicular = perpendicularNumerator / max(abs(perpendicularDenominator), 1.0e-7f);
-                            dielectric = saturate(0.5f * (parallel * parallel + perpendicular * perpendicular));
-                        }
+                        return float3(1.0f);
                     }
-                }
-                else
-                {
-                    float iorDenominator = interfaceIor + 1.0f;
-                    float f0 = abs(iorDenominator) > 1.0e-7f
-                                   ? ((interfaceIor - 1.0f) / iorDenominator) * ((interfaceIor - 1.0f) / iorDenominator)
-                                   : 1.0f;
-                    dielectric = fresnelSchlick(saturate(f0), cosine);
                 }
             }
         }
 
-        return dielectric;
+        return fresnelSchlick(payload.dielectricF0, float3(payload.dielectricF90), cosine);
     }
 
     public float3 interfaceFresnel(ResolvedMaterialPayload payload, float cosine)
     {
-        if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
-        {
-            // KHR_materials_ior reserves zero for its positive-infinity compatibility mode.
-            // The final Fresnel term is exactly one even for fractional metallic materials.
-            if (payload.layers.transmissionIor == 0.0f)
-            {
-                return float3(1.0f);
-            }
-        }
-
         MaterialSample core = materialSampleFromResolvedPayload(payload);
-        float3 dielectricFresnel = float3(dielectricInterfaceFresnel(payload, cosine));
+        float3 dielectricFresnel = dielectricInterfaceFresnel(payload, cosine);
         float3 conductorFresnel = fresnelSchlick(payload.baseColor.rgb, cosine);
         return lerp(dielectricFresnel, conductorFresnel, core.metallic);
     }
@@ -813,14 +821,18 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             return false;
         }
 
-        return payload.layers.transmission > 0.0f && payload.layers.transmissionIor > 0.0f && payload.metallic < 1.0f;
+        bool iorSupportsMode = payload.layers.transmissionMode == RtTransmissionMode.thin ||
+                               payload.layers.transmissionIor > 0.0f;
+        return payload.layers.transmission > 0.0f && iorSupportsMode && payload.metallic < 1.0f;
     }
 
     public GgxSpecularEnergyTerms specularEnergyTerms(ResolvedMaterialPayload payload, float3 specularNormal,
                                                       float3 viewDirection)
     {
         float noV = saturate(dot(specularNormal, viewDirection));
-        return computeGgxSpecularEnergyTerms(payload.roughness, noV, interfaceFresnel(payload, 1.0f), float3(1.0f));
+        float3 f0 = lerp(payload.dielectricF0, payload.baseColor.rgb, payload.metallic);
+        float3 f90 = lerp(float3(payload.dielectricF90), float3(1.0f), payload.metallic);
+        return computeGgxSpecularEnergyTerms(payload.roughness, noV, f0, f90);
     }
 
     public void selectionWeights(ResolvedMaterialPayload payload, float3 viewDirection, out float diffuseWeight,
@@ -831,26 +843,26 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         float noV = saturate(dot(specularNormal, viewDirection));
         float3 fresnel = interfaceFresnel(payload, noV);
         float3 reflectionImportance = fresnel;
-        float3 diffusePreservation = float3(1.0f) - fresnel;
+        float3 dielectricFresnel = dielectricInterfaceFresnel(payload, noV);
+        float3 diffusePreservation = float3(1.0f - max(max(dielectricFresnel.r, dielectricFresnel.g),
+                                                       dielectricFresnel.b));
         if (!hasActiveTransmission(payload))
         {
             GgxSpecularEnergyTerms energy = specularEnergyTerms(payload, specularNormal, viewDirection);
             reflectionImportance = energy.E;
-            diffusePreservation = float3(saturate(1.0f - materialPayloadLuminance(energy.E)));
+            diffusePreservation =
+                float3(saturate(1.0f - max(max(energy.E.r, energy.E.g), energy.E.b)));
         }
 
         float transmissionFactor = 0.0f;
         float3 transmissionImportance = float3(0.0f);
 
-        if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
+        if (hasActiveTransmission(payload))
         {
-            if (payload.layers.transmissionIor > 0.0f)
-            {
-                transmissionFactor = payload.layers.transmission;
-                float transmissionFresnel = dielectricInterfaceFresnel(payload, noV);
-                transmissionImportance = (1.0f - transmissionFresnel) * payload.baseColor.rgb *
-                                         (1.0f - payload.metallic) * transmissionFactor;
-            }
+            transmissionFactor = payload.layers.transmission;
+            float3 transmissionFresnel = dielectricInterfaceFresnel(payload, noV);
+            transmissionImportance = (float3(1.0f) - transmissionFresnel) * payload.baseColor.rgb *
+                                     (1.0f - payload.metallic) * transmissionFactor;
         }
 
         float dielectricShare = 1.0f - payload.metallic;
@@ -867,15 +879,12 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         float reflectionImportance = max(materialPayloadLuminance(fresnel), 0.0f);
         float transmissionImportance = 0.0f;
 
-        if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
+        if (hasActiveTransmission(payload))
         {
-            if (payload.layers.transmissionIor > 0.0f)
-            {
-                float transmissionFresnel = dielectricInterfaceFresnel(payload, cosine);
-                float3 importance = (1.0f - transmissionFresnel) * payload.baseColor.rgb * (1.0f - payload.metallic) *
-                                    payload.layers.transmission;
-                transmissionImportance = max(materialPayloadLuminance(importance), 0.0f);
-            }
+            float3 transmissionFresnel = dielectricInterfaceFresnel(payload, cosine);
+            float3 importance = (float3(1.0f) - transmissionFresnel) * payload.baseColor.rgb *
+                                (1.0f - payload.metallic) * payload.layers.transmission;
+            transmissionImportance = max(materialPayloadLuminance(importance), 0.0f);
         }
 
         float totalImportance = reflectionImportance + transmissionImportance;
@@ -903,6 +912,10 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             float3 clearcoatSpecularNormal = adjustMaterialPayloadSpecularNormal(
                 payload.layers.clearcoatNormal, facingClearcoatGeometryNormal, viewDirection);
             result *= clearcoatBaseAttenuation(payload.layers, clearcoatSpecularNormal, viewDirection);
+        }
+        if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
+        {
+            result *= materialPayloadSheenBaseAlbedoScaling(payload, viewDirection, viewDirection);
         }
         return result;
     }
@@ -1042,17 +1055,16 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         {
             float3 diffuseHalfVector = safeNormalize(viewDirection + lightDirection, rawNormal);
             float diffuseVoH = saturate(dot(viewDirection, diffuseHalfVector));
-            float3 diffusePreservation = float3(1.0f) - interfaceFresnel(payload, diffuseVoH);
+            float3 dielectricFresnel = dielectricInterfaceFresnel(payload, diffuseVoH);
+            float3 diffusePreservation = float3(1.0f - max(max(dielectricFresnel.r, dielectricFresnel.g),
+                                                           dielectricFresnel.b));
             if (!hasActiveTransmission(payload))
             {
                 GgxSpecularEnergyTerms energy = specularEnergyTerms(payload, specularNormal, viewDirection);
-                diffusePreservation = float3(saturate(1.0f - materialPayloadLuminance(energy.E)));
+                diffusePreservation =
+                    float3(saturate(1.0f - max(max(energy.E.r, energy.E.g), energy.E.b)));
             }
-            float transmissionFactor = 0.0f;
-            if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
-            {
-                transmissionFactor = payload.layers.transmission;
-            }
+            float transmissionFactor = hasActiveTransmission(payload) ? payload.layers.transmission : 0.0f;
 
             result.diffuse = diffusePreservation * core.baseColor.rgb * (1.0f - core.metallic) *
                              (1.0f - transmissionFactor) * kMaterialInvPi;
@@ -1080,8 +1092,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
             bool transmissionSupported =
                 signedSpecularNoL < -kMaterialMinCosTheta &&
                 materialPayloadGeometrySupportsTransmission(facingGeometryNormal, lightDirection) &&
-                absSpecularNoL > kMaterialMinCosTheta && transmissionFactor > 0.0f &&
-                payload.layers.transmissionIor > 0.0f;
+                absSpecularNoL > kMaterialMinCosTheta && hasActiveTransmission(payload);
             if (!transmissionSupported)
             {
                 return result;
@@ -1099,10 +1110,10 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                     return result;
                 }
 
-                float transmissionFresnel = dielectricInterfaceFresnel(payload, voH);
+                float3 transmissionFresnel = dielectricInterfaceFresnel(payload, voH);
                 float distribution = baseGgx.distribution(payload, specularNormal, halfVector);
                 float geometry = baseGgx.smithG2(payload, specularNormal, viewDirection, lightDirection);
-                float3 transmission = (1.0f - transmissionFresnel) * core.baseColor.rgb * transmissionFactor *
+                float3 transmission = (float3(1.0f) - transmissionFresnel) * core.baseColor.rgb * transmissionFactor *
                                       distribution * geometry / max(4.0f * specularNoV * absSpecularNoL, 1.0e-7f);
                 result.specular += transmission;
                 result.specularProjected += transmission * absSpecularNoL;
@@ -1138,13 +1149,13 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
                 return result;
             }
 
-            float transmissionFresnel = dielectricInterfaceFresnel(payload, voH);
+            float3 transmissionFresnel = dielectricInterfaceFresnel(payload, voH);
             float distribution = baseGgx.distribution(payload, specularNormal, halfVector);
             float geometry = baseGgx.smithG2(payload, specularNormal, viewDirection, lightDirection);
             float refractionFactor =
                 etaT * etaT * abs(voH * loH) / max(specularNoV * absSpecularNoL * denominator2, 1.0e-10f);
             float radianceEtaCorrection = (etaI * etaI) / (etaT * etaT);
-            float3 transmission = (1.0f - transmissionFresnel) * core.baseColor.rgb * transmissionFactor *
+            float3 transmission = (float3(1.0f) - transmissionFresnel) * core.baseColor.rgb * transmissionFactor *
                                   distribution * geometry * refractionFactor * radianceEtaCorrection;
             result.specular += transmission;
             result.specularProjected += transmission * absSpecularNoL;
@@ -1180,8 +1191,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
         {
             if (specularNoV <= kMaterialMinCosTheta || signedSpecularNoL >= -kMaterialMinCosTheta ||
                 !materialPayloadGeometrySupportsTransmission(facingGeometryNormal, lightDirection) ||
-                payload.layers.transmission <= 0.0f || payload.metallic >= 1.0f ||
-                payload.layers.transmissionIor <= 0.0f)
+                !hasActiveTransmission(payload))
             {
                 return weightedPdf / baseWeight;
             }
@@ -1319,8 +1329,7 @@ public struct BaseSurfaceBsdfLobe<let LayerFlags : RtMaterialLayerFlag>
 
         if (uint(LayerFlags & RtMaterialLayerFlag.transmission) != 0u)
         {
-            if (transmissionProbability <= 0.0f || payload.layers.transmission <= 0.0f || payload.metallic >= 1.0f ||
-                payload.layers.transmissionIor <= 0.0f)
+            if (transmissionProbability <= 0.0f || !hasActiveTransmission(payload))
             {
                 return scatter;
             }
@@ -1610,6 +1619,12 @@ public ResolvedMaterialBsdfComponents evaluateResolvedMaterialBsdfComponentsVari
     }
     if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
     {
+        float baseAlbedoScaling = materialPayloadSheenBaseAlbedoScaling(payload, viewDirection, lightDirection);
+        result.diffuse *= baseAlbedoScaling;
+        result.specular *= baseAlbedoScaling;
+        result.diffuseProjected *= baseAlbedoScaling;
+        result.specularProjected *= baseAlbedoScaling;
+
         SheenBsdfLobe sheen;
         MaterialPayloadReflectionEvaluation sheenReflection =
             sheen.evaluateFoldedReflection(payload, viewDirection, lightDirection);
@@ -1784,6 +1799,13 @@ public ResolvedMaterialScatter sampleResolvedMaterialScatterVariant<let LayerFla
             float baseAttenuation = clearcoatBaseAttenuation(payload.layers, clearcoatSpecularNormal, viewDirection);
             scatter.diffuseWeight *= baseAttenuation;
             scatter.specularWeight *= baseAttenuation;
+        }
+        if (uint(LayerFlags & RtMaterialLayerFlag.sheen) != 0u)
+        {
+            float baseAlbedoScaling =
+                materialPayloadSheenBaseAlbedoScaling(payload, viewDirection, scatter.direction);
+            scatter.diffuseWeight *= baseAlbedoScaling;
+            scatter.specularWeight *= baseAlbedoScaling;
         }
 
         scatter.diffuseWeight /= scatter.pmf;

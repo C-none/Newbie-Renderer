@@ -29,7 +29,9 @@ struct MaterialPropertyKey
 };
 
 constexpr MaterialPropertyKey kMatKeyBaseColor{"$clr.base", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyColorDiffuse{"$clr.diffuse", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyColorEmissive{"$clr.emissive", 0u, 0u};
+constexpr MaterialPropertyKey kMatKeyColorSpecular{"$clr.specular", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyMetallicFactor{"$mat.metallicFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyRoughnessFactor{"$mat.roughnessFactor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyAnisotropyFactor{"$mat.anisotropyFactor", 0u, 0u};
@@ -40,7 +42,6 @@ constexpr MaterialPropertyKey kMatKeyGltfAlphaMode{"$mat.gltf.alphaMode", 0u, 0u
 constexpr MaterialPropertyKey kMatKeyGltfAlphaCutoff{"$mat.gltf.alphaCutoff", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyTwoSided{"$mat.twosided", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyBumpScaling{"$mat.bumpscaling", 0u, 0u};
-constexpr MaterialPropertyKey kMatKeyEmissiveIntensity{"$mat.emissiveIntensity", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyBlendFunc{"$mat.blend", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyClearcoatFactor{"$mat.clearcoat.factor", 0u, 0u};
 constexpr MaterialPropertyKey kMatKeyClearcoatRoughnessFactor{"$mat.clearcoat.roughnessFactor", 0u, 0u};
@@ -55,6 +56,9 @@ constexpr MaterialPropertyKey kMatKeyAnisotropyRotation{"$mat.anisotropyRotation
 constexpr MaterialPropertyKey kMatKeyShadingModel{"$mat.shadingm", 0u, 0u};
 // Stable property key used by AI_MATKEY_UVTRANSFORM(textureType, textureSlot).
 inline constexpr const char *kMatKeyUvTransform = "$tex.uvtrafo";
+// Stable property keys used by AI_MATKEY_GLTF_TEXTURE_SCALE/STRENGTH(textureType, textureSlot).
+inline constexpr const char *kMatKeyGltfTextureScale = "$tex.scale";
+inline constexpr const char *kMatKeyGltfTextureStrength = "$tex.strength";
 inline constexpr const char *kAssimpGltfLightRangeMetadataKey = "PBR_LightRange";
 
 struct AssimpTextureTransform
@@ -95,6 +99,18 @@ struct AssimpTextureTransform
 
     value = static_cast<float>(raw);
     return true;
+}
+
+[[nodiscard]] bool readMaterialTextureFloat(const aiMaterial &material, const char *key, aiTextureType textureType,
+                                            unsigned int textureSlot, float &value)
+{
+    return readMaterialFloat(material,
+                             MaterialPropertyKey{
+                                 .name = key,
+                                 .type = static_cast<unsigned int>(textureType),
+                                 .index = textureSlot,
+                             },
+                             value);
 }
 
 [[nodiscard]] bool readMaterialInteger(const aiMaterial &material, const MaterialPropertyKey &key, int &value)
@@ -574,7 +590,15 @@ struct VertexTangentVariant
     case aiTextureType_DIFFUSE:
         return "diffuse";
     case aiTextureType_SPECULAR:
-        return "specular";
+        switch (textureSlot)
+        {
+        case 0u:
+            return "specular";
+        case 1u:
+            return "specular_color";
+        default:
+            return std::format("specular_{}", textureSlot);
+        }
     case aiTextureType_AMBIENT:
         return "ambient";
     case aiTextureType_EMISSIVE:
@@ -657,7 +681,9 @@ struct VertexTangentVariant
 }
 
 [[nodiscard]] nr::resource::MaterialTextureSlotSemantic textureSlotSemantic(aiTextureType textureType,
-                                                                            unsigned int textureSlot) noexcept
+                                                                            unsigned int textureSlot,
+                                                                            bool hasSpecularExtension,
+                                                                            bool isSpecularGlossiness) noexcept
 {
     using enum nr::resource::MaterialTextureSlotSemantic;
 
@@ -679,6 +705,20 @@ struct VertexTangentVariant
     case aiTextureType_EMISSIVE:
     case aiTextureType_EMISSION_COLOR:
         return emissive;
+    case aiTextureType_SPECULAR:
+        if (!hasSpecularExtension || isSpecularGlossiness)
+        {
+            return unsupported;
+        }
+        switch (textureSlot)
+        {
+        case 0u:
+            return specular;
+        case 1u:
+            return specularColor;
+        default:
+            return unsupported;
+        }
     case aiTextureType_METALNESS:
     case aiTextureType_DIFFUSE_ROUGHNESS:
     case aiTextureType_GLTF_METALLIC_ROUGHNESS:
@@ -1022,16 +1062,31 @@ struct VertexTangentVariant
                 materialAsset.name);
         }
 
-        // Read specular factor (for specular-glossiness workflow)
-        if (aiColor3D specular; readMaterialColor3(*material, kMatKeySpecularFactor, specular))
-        {
-            materialAsset.specularFactor = std::array<float, 3>{specular.r, specular.g, specular.b};
-        }
-
-        // Read glossiness factor
         if (float glossiness; readMaterialFloat(*material, kMatKeyGlossinessFactor, glossiness))
         {
-            materialAsset.glossinessFactor = glossiness;
+            auto specularGlossiness = MaterialSpecularGlossinessAsset{
+                .glossinessFactor = glossiness,
+            };
+            if (aiColor4D diffuse; readMaterialColor4(*material, kMatKeyColorDiffuse, diffuse))
+            {
+                specularGlossiness.diffuseFactor = {diffuse.r, diffuse.g, diffuse.b, diffuse.a};
+            }
+            if (aiColor3D specular; readMaterialColor3(*material, kMatKeyColorSpecular, specular))
+            {
+                specularGlossiness.specularFactor = {specular.r, specular.g, specular.b};
+            }
+            materialAsset.specularGlossiness = specularGlossiness;
+        }
+        else if (float factor; readMaterialFloat(*material, kMatKeySpecularFactor, factor))
+        {
+            auto specular = MaterialSpecularExtensionAsset{
+                .factor = factor,
+            };
+            if (aiColor3D colorFactor; readMaterialColor3(*material, kMatKeyColorSpecular, colorFactor))
+            {
+                specular.colorFactor = {colorFactor.r, colorFactor.g, colorFactor.b};
+            }
+            materialAsset.specular = specular;
         }
 
         // Read opacity
@@ -1057,16 +1112,18 @@ struct VertexTangentVariant
             materialAsset.doubleSided = twoSided != 0;
         }
 
-        // Read normal scale / bump scaling
-        if (float normalScale; readMaterialFloat(*material, kMatKeyBumpScaling, normalScale))
+        if (float normalScale;
+            readMaterialTextureFloat(*material, kMatKeyGltfTextureScale, aiTextureType_NORMALS, 0u, normalScale) ||
+            readMaterialFloat(*material, kMatKeyBumpScaling, normalScale))
         {
             materialAsset.normalScale = normalScale;
         }
 
-        // Read occlusion strength
-        if (float aoIntensity; readMaterialFloat(*material, kMatKeyEmissiveIntensity, aoIntensity))
+        if (float occlusionStrength;
+            readMaterialTextureFloat(*material, kMatKeyGltfTextureStrength, aiTextureType_LIGHTMAP, 0u,
+                                     occlusionStrength))
         {
-            materialAsset.occlusionStrength = aoIntensity;
+            materialAsset.occlusionStrength = occlusionStrength;
         }
 
         // Classify KHR_materials_unlit: Assimp maps the extension to no-shading mode.
@@ -1088,27 +1145,6 @@ struct VertexTangentVariant
                 }
             }
         }
-
-        // Classify workflow flags based on properties
-        auto classifyWorkflow = [&]() {
-            MaterialWorkflowFlags flags = MaterialWorkflowFlags::metallicRoughness;
-
-            if (materialAsset.specularFactor.has_value() && materialAsset.glossinessFactor.has_value())
-            {
-                flags = static_cast<MaterialWorkflowFlags>(
-                    static_cast<std::uint8_t>(flags) |
-                    static_cast<std::uint8_t>(MaterialWorkflowFlags::specularGlossiness));
-            }
-
-            if (materialAsset.anisotropyFactor.has_value() && *materialAsset.anisotropyFactor > 0.0f)
-            {
-                flags = static_cast<MaterialWorkflowFlags>(
-                    static_cast<std::uint8_t>(flags) | static_cast<std::uint8_t>(MaterialWorkflowFlags::anisotropy));
-            }
-
-            return flags;
-        };
-        materialAsset.workflowFlags = classifyWorkflow();
 
         // Read texture bindings
         auto textureTypeRange = std::views::iota(0u, assimpTextureTypeMax + 1u);
@@ -1192,7 +1228,9 @@ struct VertexTangentVariant
                     .uvChannel = uvChannel,
                     .transform = textureTransform,
                     .textureTypeRaw = textureTypeRaw,
-                    .semantic = textureSlotSemantic(textureType, slotIndex),
+                    .semantic =
+                        textureSlotSemantic(textureType, slotIndex, materialAsset.specular.has_value(),
+                                            materialAsset.specularGlossiness.has_value()),
                     .sourceSemanticName = textureTypeName(textureType, slotIndex),
                 });
             }
@@ -1773,6 +1811,6 @@ namespace nr::load
 [[nodiscard]] nr::resource::MaterialTextureSlotSemantic assimpTextureSlotSemantic(std::uint32_t textureTypeRaw,
                                                                                   std::uint32_t textureSlot) noexcept
 {
-    return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot);
+    return detail::textureSlotSemantic(static_cast<aiTextureType>(textureTypeRaw), textureSlot, false, false);
 }
 } // namespace nr::load

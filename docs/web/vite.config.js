@@ -7,7 +7,8 @@ import { resolve } from 'path';
 export default defineConfig({
   base: '/Newbie-Renderer/',
   root: import.meta.dirname,
-  publicDir: 'assets/exr',
+  publicDir: 'public',
+  assetsInclude: ['**/*.exr'],
   plugins: [
     stylelint(),
     svgLoader(),

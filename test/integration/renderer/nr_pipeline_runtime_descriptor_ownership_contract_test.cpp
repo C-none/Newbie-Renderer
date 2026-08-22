@@ -32,8 +32,8 @@ using PassBindingHandle = Runtime::PassBindingHandle;
 
 const nr::test::CaseRegistrar pipelineRuntimeDescriptorOwnershipCase{
     "pipeline runtime isolates descriptor state by pass owner and frame slot", [] {
-        auto device = nr::rhi::Device{};
-        device.initialize("nr_pipeline_runtime_descriptor_ownership_contract_test", "NewbieRenderer");
+        auto device = nr::rhi::Device::create("nr_pipeline_runtime_descriptor_ownership_contract_test",
+                                              "NewbieRenderer");
         auto program = compileOwnershipProgram(std::filesystem::path{"renderer/accumulate"});
         auto runtime = std::make_shared<Runtime>();
         runtime->initialize(device.pipeline().createComputePipeline(program, {}, 64u, {}, "PipelineRuntime.Ownership"));

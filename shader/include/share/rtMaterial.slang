@@ -56,10 +56,12 @@ public struct RtMaterialHeader
     public float4 baseColorFactor = float4(1.0f);
     public float4 emissiveAndMetallic = float4(0.0f);
     public float4 roughnessNormalOcclusionAlpha = float4(1.0f, 1.0f, 1.0f, 1.0f);
-    // x is reserved. Transmission factor, IOR, and mode have one source of truth in the layer record.
-    public float4 transmissionClearcoatSheen = float4(0.0f);
+    // x is the base dielectric IOR. Active transmission repeats factor, IOR, and mode in its layer record.
+    public float4 transmissionClearcoatSheen = float4(1.5f, 0.0f, 0.0f, 0.0f);
     // strength, counter-clockwise rotation in radians, usable-texture presence, reserved.
     public float4 anisotropy = float4(0.0f);
+    // RGB is KHR_materials_specular.specularColorFactor; A is specularFactor.
+    public float4 specularColorAndFactor = float4(1.0f);
 };
 
 public struct RtMaterialLayerRecord

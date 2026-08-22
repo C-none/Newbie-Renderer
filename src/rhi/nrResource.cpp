@@ -19,21 +19,6 @@ constexpr auto kDefaultViewCompatibleImageUsage =
     vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eInputAttachment |
     vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT |
     vk::ImageUsageFlagBits::eFragmentShadingRateAttachmentKHR;
-
-[[maybe_unused]] void setDebugObjectName(const vk::raii::Device &device, vk::ObjectType objectType,
-                                         std::uint64_t objectHandle, const std::string &debugName)
-{
-    auto nameInfo = vk::DebugUtilsObjectNameInfoEXT{objectType, objectHandle, debugName.c_str()};
-    try
-    {
-        device.setDebugUtilsObjectNameEXT(nameInfo);
-    }
-    catch (const vk::SystemError &error)
-    {
-        nrLog<LogLevel::warning>("Failed to set Vulkan debug name '{}': {}", debugName, error.what());
-        nrAssert(false, "Failed to set a Vulkan debug object name.");
-    }
-}
 } // namespace
 
 Buffer &Buffer::operator=(Buffer &&other) noexcept
@@ -77,8 +62,15 @@ Buffer &Buffer::operator=(Buffer &&other) noexcept
         if (!result.name_.empty())
         {
             nrAssert(result.valid(), "Cannot set a debug name on an invalid buffer.");
-            setDebugObjectName(device, vk::ObjectType::eBuffer,
-                               reinterpret_cast<std::uint64_t>(static_cast<VkBuffer>(result.handle())), result.name_);
+            try
+            {
+                setDebugObjectName<vk::ObjectType::eBuffer>(device, result.handle(), result.name_);
+            }
+            catch (const vk::SystemError &error)
+            {
+                nrLog<LogLevel::warning>("Failed to set Vulkan debug name '{}': {}", result.name_, error.what());
+                nrAssert(false, "Failed to set a Vulkan debug object name.");
+            }
         }
     }
 
@@ -169,8 +161,15 @@ std::reference_wrapper<const vk::raii::BufferView> Buffer::addView(vk::Format fo
     // Set Vulkan debug name for the view when debugger-facing names are enabled.
     if constexpr (gpuDebugNamesEnabled)
     {
-        setDebugObjectName(device_->get(), vk::ObjectType::eBufferView,
-                           reinterpret_cast<std::uint64_t>(static_cast<VkBufferView>(*it->second)), it->first);
+        try
+        {
+            setDebugObjectName<vk::ObjectType::eBufferView>(device_->get(), it->second, it->first);
+        }
+        catch (const vk::SystemError &error)
+        {
+            nrLog<LogLevel::warning>("Failed to set Vulkan debug name '{}': {}", it->first, error.what());
+            nrAssert(false, "Failed to set a Vulkan debug object name.");
+        }
     }
 
     return std::cref(it->second);
@@ -229,12 +228,17 @@ void Buffer::writeMappedAndFlush(const void *data, std::size_t dataSize, vk::Dev
         if (!debugName.empty())
         {
             nrAssert(result.valid(), "Cannot set debug names on an invalid image.");
-            setDebugObjectName(device, vk::ObjectType::eImage,
-                               reinterpret_cast<std::uint64_t>(static_cast<VkImage>(result.handle())), debugName);
-            auto defaultViewName = std::format("{}_defaultView", debugName);
-            setDebugObjectName(device, vk::ObjectType::eImageView,
-                               reinterpret_cast<std::uint64_t>(static_cast<VkImageView>(*result.defaultView_)),
-                               defaultViewName);
+            try
+            {
+                setDebugObjectName<vk::ObjectType::eImage>(device, result.handle(), debugName);
+                auto defaultViewName = std::format("{}_defaultView", debugName);
+                setDebugObjectName<vk::ObjectType::eImageView>(device, result.defaultView_, defaultViewName);
+            }
+            catch (const vk::SystemError &error)
+            {
+                nrLog<LogLevel::warning>("Failed to set Vulkan debug name '{}': {}", debugName, error.what());
+                nrAssert(false, "Failed to set a Vulkan debug object name.");
+            }
         }
     }
 

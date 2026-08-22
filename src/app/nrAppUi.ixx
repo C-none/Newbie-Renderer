@@ -49,7 +49,7 @@ class UiSystem
     void shutdown();
 
     [[nodiscard]] bool initialized() const noexcept;
-    void beginFrame(const nr::rhi::PresentationContext &presentation, float deltaSeconds);
+    void beginFrame(nr::rhi::PresentationContext &presentation, float deltaSeconds);
     [[nodiscard]] UiCaptureState finalizeFrame();
 
     void queueSection(UiSection section);

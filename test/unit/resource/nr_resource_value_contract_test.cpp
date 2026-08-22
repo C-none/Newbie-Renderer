@@ -153,7 +153,7 @@ const nr::test::CaseRegistrar textureMaterialCase{
         auto material = nr::resource::Material{};
         nr::test::require(material.isOpaque(), "default material should be opaque");
         nr::test::requireEqual(material.core.metallicFactor, 1.0f);
-        nr::test::requireEqual(nr::resource::materialTextureSlotCount, std::size_t{12});
+        nr::test::requireEqual(nr::resource::materialTextureSlotCount, std::size_t{14});
         nr::test::require(
             nr::resource::materialTextureSlotSemanticValid(nr::resource::MaterialTextureSlotSemantic::baseColor),
             "baseColor should be a valid material texture slot semantic");
